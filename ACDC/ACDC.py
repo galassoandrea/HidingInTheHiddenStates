@@ -12,13 +12,12 @@ class ACDC:
     for finding minimal circuits responsible for specific tasks.
     """
 
-    def __init__(self, model, model_name, topic,
+    def __init__(self, model, model_name,
                  mode: str = "greedy",
                  method: str = "pruning", threshold: float = 0.1):
 
         self.model = model
         self.model_name = model_name
-        self.topic = topic
         self.threshold = threshold
         self.device = model.cfg.device
         self.mode = mode
@@ -36,9 +35,9 @@ class ACDC:
 
         # Create dataset
         print("Building Factuality dataset...")
-        dataset_builder = FactualityDatasetBuilder(model, topic=self.topic)
+        dataset_builder = FactualityDatasetBuilder(model)
         self.dataset = dataset_builder.build_dataset()
-        # Keep only the first 10 examples for faster testing
+        # Keep only first 10 examples for testing
         self.dataset = self.dataset[:10]
 
     def discover_circuit(self):
@@ -56,20 +55,19 @@ class ACDC:
         corrupted_caches = []
 
         # Collect clean and corrupted reference outputs and caches
+        act_names = get_activations_name(self.model_name, self.model.cfg.n_layers)
         for example in tqdm(self.dataset, desc="Collecting reference outputs"):
             with torch.no_grad():
                 clean_inputs = example.clean_tokens
                 # Cache activations and keep only needed ones
-                l_clean, c_clean = self.model.run_with_cache(clean_inputs, return_type="logits")
-                c_clean = filter_hooks(c_clean, self.model_name, self.model.cfg.n_layers)
+                l_clean, c_clean = self.model.run_with_cache(clean_inputs, return_type="logits", names_filter=act_names)
                 l_clean = l_clean.cpu()
                 self.clean_logits.append(l_clean)
                 clean_caches.append(c_clean)
                 if self.method == "patching":
                     # Also collect corrupted outputs for activation patching
                     corrupted_inputs = example.corrupted_tokens
-                    _, c_corr = self.model.run_with_cache(corrupted_inputs, return_type="logits")
-                    c_corr = filter_hooks(c_corr, self.model_name, self.model.cfg.n_layers)
+                    _, c_corr = self.model.run_with_cache(corrupted_inputs, return_type="logits", names_filter=act_names)
                     corrupted_caches.append(c_corr)
 
         # Precompute node contributions for all examples
@@ -99,7 +97,7 @@ class ACDC:
         )
         print(f"Final KL divergence: {kl_score:.6f}")
 
-        save_circuit(self.model_name, self.topic, self.ablated_nodes)
+        save_circuit(self.model_name, self.ablated_nodes)
 
         return self.circuit
 

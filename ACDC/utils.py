@@ -84,16 +84,16 @@ def get_final_performance(
     evaluate_factuality(logits, labels, model)
     return avg_kl_div
 
-def filter_hooks(cache, model_name, layers):
-    all_hooks = []
+def get_activations_name(model_name, layers):
+    names = []
     if "pythia" in model_name:
         hook_list = ["attn.hook_z", "hook_resid_pre", "hook_resid_post", "hook_mlp_out"]
     else:
         hook_list = ["attn.hook_z", "hook_resid_pre", "hook_resid_mid", "hook_resid_post", "hook_mlp_out"]
     for hook_name in hook_list:
         hooks = [f"blocks.{l}.{hook_name}" for l in range(layers)]
-        all_hooks.extend(hooks)
-    return {k: v.detach().cpu() for k, v in cache.items() if k in all_hooks}
+        names.extend(hooks)
+    return names
 
 def get_node_id(node: Node) -> str:
     """Get the ID string for a given node."""
@@ -103,7 +103,7 @@ def get_node_id(node: Node) -> str:
         node_id = f"L{node.layer}-{node.name.split('_', 1)[1]}"
     return node_id
 
-def save_circuit(model_name, topic, ablated_nodes: Optional[List[Node]] = None):
+def save_circuit(model_name, ablated_nodes: Optional[List[Node]] = None):
     # Store removed edges/nodes metadata in a json file
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
     params_to_save = {
@@ -117,13 +117,13 @@ def save_circuit(model_name, topic, ablated_nodes: Optional[List[Node]] = None):
     os.makedirs(save_dir, exist_ok=True)
 
     # Build full file path
-    save_path = os.path.join(save_dir, f"{model_name.replace('/', '-')}-{topic}.json")
+    save_path = os.path.join(save_dir, f"{model_name.replace('/', '-')}.json")
     with open(save_path, "w") as f:
         json.dump(params_to_save, f, indent=2)
 
-def add_circuit_hooks(model, model_name, topic):
+def add_circuit_hooks(model, model_name):
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-    path = os.path.join(SCRIPT_DIR, f"removed_nodes", f"{model_name.replace('/', '-')}-{topic}.json")
+    path = os.path.join(SCRIPT_DIR, f"removed_nodes", f"{model_name.replace('/', '-')}.json")
     with open(path, "r") as f:
         params = json.load(f)
         print(f"Loaded removed nodes: {params}")

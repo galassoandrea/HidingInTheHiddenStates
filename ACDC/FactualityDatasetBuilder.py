@@ -30,22 +30,13 @@ class FactualityExample:
 class FactualityDatasetBuilder:
     """Builds a dataset for the Factuality task"""
 
-    def __init__(self, model, topic):
-        if topic == "animals":
-            self.df = pd.read_csv("../resources/animals_true_false.csv")
-            self.df["topic"] = "animals"
-        elif topic == "cities":
-            self.df = pd.read_csv("../resources/cities_true_false.csv")
-            self.df["topic"] = "cities"
-        elif topic == "elements":
-            self.df = pd.read_csv("../resources/elements_true_false.csv")
-            self.df["topic"] = "elements"
-        #elif topic == "inventions":
-        #    self.df = pd.read_csv("tasks/factuality_data/inventions_true_false.csv")
-        #    self.df["topic"] = "elements"
-        #elif topic == "companies":
-        #    self.df = pd.read_csv("tasks/factuality_data/companies_true_false.csv")
-        #    self.df["topic"] = "elements"
+    def __init__(self, model):
+        # Load each dataframe and create a combined dataframe with a topic column
+        self.df = pd.DataFrame()
+        for topic in ["animals", "cities", "elements"]:
+            df = pd.read_csv(f"../resources/{topic}_true_false.csv", nrows=10)
+            df["topic"] = topic
+            self.df = pd.concat([self.df, df], ignore_index=True)
         self.model = model
         self.system_role = ("You are a judge and your role is to judge whether the provided statement is true or false,"
                             " based on your knowledge. Answer with 1 if the statement is true"
@@ -65,6 +56,8 @@ class FactualityDatasetBuilder:
         self.cities = ['Zimbabwe', 'Uganda', 'Argentina', 'North Korea', 'South Africa', 'Congo', 'Algeria', 'United States', 'Russia', 'Tanzania', 'Saudi Arabia', 'Papua New Guinea', 'Pakistan', 'Japan', 'Ukraine', 'Montenegro', 'Germany', 'Brazil', 'Nigeria', 'India', 'Philippines', 'United Arab Emirates', 'Greece', 'Uzbekistan', 'Czechia', 'South Korea', 'Guatemala', 'Macau', 'Djibouti', 'Mexico', 'Switzerland', 'Mauritania', 'Senegal', 'Cayman Islands', 'Malaysia', 'United Kingdom', 'China', 'Jamaica', 'Haiti']
         self.animals = ['beaver', 'leopard', 'swan', 'polar bear', 'wolverine', 'salmon', 'rhinoceros', 'manta', 'gecko', 'giant anteater', 'snake', 'skunk', 'hippopotamus', 'cow', 'vulture', 'deer', 'sparrow', 'seagull', 'mongoose', 'rat', 'crocodile', 'flamingo', 'tapir', 'jellyfish', 'walrus', 'hedgehog', 'hamster', 'giraffe', 'ostrich', 'dog', 'slug', 'tortoise', 'hummingbird', 'tiger', 'camel', 'zebra', 'lobster', 'kangaroo', 'aardvark', 'dolphin', 'manta ray', 'tuna', 'elephant', 'peacock', 'goldfish', 'raccoon', 'alpaca', 'axolotl', 'armadillo']
         self.elements = ['Tantalum', 'Calcium', 'Gadolinium', 'Samarium', 'Cerium', 'Iridium', 'Rhenium', 'Scandium', 'Nickel', 'Thallium', 'Silver', 'Oxygen', 'Actinium', 'Promethium', 'Astatine', 'Osmium', 'Platinum', 'Tin', 'Nitrogen', 'Beryllium', 'Arsenic', 'Lead', 'Mercury', 'Fluorine', 'Lanthanum', 'Radium', 'Iron', 'Zirconium', 'Praseodymium', 'Lithium', 'Francium', 'Ruthenium', 'Iodine', 'Neon', 'Copper', 'Erbium', 'Krypton', 'Rubidium', 'Thorium', 'Protactinium', 'Rhodium', 'Antimony', 'Boron', 'Bismuth', 'Tellurium', 'Titanium', 'Cadmium', 'Sulfur', 'Holmium', 'Gallium', 'Technetium', 'Tungsten']
+        self.companies = ['China Life Insurance','JPMorgan Chase','Bank of America','Mizuho Financial','UBS Group','American Express','Airbus Group','General Motors','Abbott Laboratories','Berkshire Hathaway','Johnson & Johnson','Bristol Myers Squibb','Anglo American','Tencent Holdings','Bank of Nova Scotia','Procter & Gamble','Bayerische Motoren Werke (BMW)','Rio Tinto','Intesa Sanpaolo','HCA Healthcare','IBM','Munich Reinsurance','ArcelorMittal','China Merchants Bank','Alibaba Group','Truist Financial','Industrial and Commercial Bank of China','The Home Depot','Goldman Sachs Group','America Movil','Medtronic','AXA','Nippon Telegraph & Telephone','Stellantis','Iberdrola']
+        self.inventors = ['Charles Wheatstone','Alfred Nobel','Edwin Herbert Hall','Emile Berliner','Frederick Walton','William Congreve','Fridtjof Nansen','Gustaf Dalén','Evangelista Torricelli','George Pullman','George Devol','Henri Giffard','Marvin Camras','Carlos Glidden','Charles Francis Richter','Alexander Graham Bell','William Sturgeon','Ernesto Blanco','Clarence Birdseye','Gideon Sundback','John Shepherd-Barron','Pierre Curie','Wilhelm Conrad Röntgen','Benjamin Franklin','John Wesley Hyatt','Louis Pasteur','Sir Frank Whittle','James Watt','Edwin Link','Maria Telkes','Igor Tamm','Chester Carlson','Josephine Cochrane','Vint Cerf','Ralph H. Baer','Whitcomb Judson','Joseph Glidden','Henry Ford','Biruté Galdikas','John Callcott Horsley','Richard Trevithick','Giovanni Caselli','Jack Kilby','Charles Goodyear','Lloyd Groff Copeman','Valdemar Poulsen','Herbert Akroyd Stuart','Rudolf Diesel']
 
     def corrupt_sentence(self, sentence, topic):
         words = sentence.split()
@@ -80,9 +73,23 @@ class FactualityDatasetBuilder:
             words[0] = corr_element
         elif topic == "cities":
             clean_city = words[0]
-            other_cities = [a for a in self.elements if a != clean_city]
+            other_cities = [a for a in self.cities if a != clean_city]
             corr_city = random.choice(other_cities)
             words[0] = corr_city
+        elif topic == "inventions":
+            if "invented" in words or "lived" in words:
+                idx = words.index("inverted") if "inverted" in words else words.index("lived")
+                clean_inventor = words[:idx]
+                other_inventors = [a for a in self.inventors if a != clean_inventor]
+                corr_inventor = random.choice(other_inventors)
+                words[:idx] = corr_inventor
+        elif topic == "companies":
+            if "engages" in words or "has" or "operates" or "is" in words:
+                idx = next(i for i, word in enumerate(words) if word in ["engages", "has", "operates", "is"])
+                clean_company = words[:idx]
+                other_companies = [a for a in self.companies if a != clean_company]
+                corr_company = random.choice(other_companies)
+                words[:idx] = corr_company
         sentence = " ".join(words)
         return sentence
 
