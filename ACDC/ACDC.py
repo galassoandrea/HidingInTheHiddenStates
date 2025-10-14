@@ -1,9 +1,9 @@
-from utils import *
-from evaluation import kl_divergence
+from .utils import *
+from .evaluation import kl_divergence
 import numpy as np
 from tqdm import tqdm
-from FactualityDatasetBuilder import FactualityDatasetBuilder
-from ComputationalGraph import Node, build_computational_graph
+from .FactualityDatasetBuilder import FactualityDatasetBuilder
+from .ComputationalGraph import Node, build_computational_graph
 
 
 class ACDC:
@@ -38,7 +38,7 @@ class ACDC:
         dataset_builder = FactualityDatasetBuilder(model)
         self.dataset = dataset_builder.build_dataset()
         # Keep only first 10 examples for testing
-        self.dataset = self.dataset[:10]
+        self.dataset = self.dataset[:50]
 
     def discover_circuit(self):
         """ Main mode to perform circuit discovery using edge pruning. """

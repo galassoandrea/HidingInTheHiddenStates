@@ -28,7 +28,8 @@ from typing import Dict
 from ACDC.utils import add_circuit_hooks
 
 
-layers_to_use = [-1, -4, -8, -12, -16]
+#layers_to_use = [-1, -4, -8, -12, -16]
+layers_to_use = [-1, -2, -4]
 list_of_datasets = [
     "animals",
     "cities",
@@ -39,8 +40,9 @@ list_of_datasets = [
 ]
 
 #model_name = "meta-llama/Llama-2-7b-hf"
-model_name = "Qwen/Qwen3-0.6B"
+#model_name = "Qwen/Qwen3-0.6B"
 #model_name = "facebook/opt-6.7b"
+model_name = "EleutherAI/pythia-70m-deduped"
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -53,9 +55,6 @@ model = HookedTransformer.from_pretrained(
     torch_dtype=torch.float16
 )
 
-# Load tokenizer from transformers
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-
 # Add hooks for removed (unimportant) nodes to the model, to run the model without those nodes
 add_circuit_hooks(model, model_name)
 
@@ -64,7 +63,7 @@ dfs: Dict[int, pd.DataFrame] = {}
 with torch.no_grad():
     for dataset_to_use in list_of_datasets:
         # Read the CSV file
-        df = pd.read_csv("resources/" + dataset_to_use + "_true_false.csv")#.head(1000)
+        df = pd.read_csv("resources/" + dataset_to_use + "_true_false.csv")
         df['embeddings'] = pd.Series(dtype='object')
         df['next_id'] = pd.Series(dtype=float)
         for layer in layers_to_use:
@@ -74,7 +73,7 @@ with torch.no_grad():
             prompt = row['statement']
             if remove_period:
                 prompt = prompt.rstrip(". ")
-            inputs = tokenizer(prompt, return_tensors="pt")
+            inputs = model.to_tokens(prompt)
 
             logits, cache = model.run_with_cache(inputs)
             next_id = torch.argmax(logits[:, -1, :], dim=-1).item()
@@ -85,4 +84,4 @@ with torch.no_grad():
             print("processing: " + str(i) + ", next_token:" + str(next_id))
 
         for layer in layers_to_use:
-            dfs[layer].to_csv("embeddings/" + "embeddings_with_labels_" + dataset_to_use + model_name.split("/")[-1] + "_" + str(abs(layer)) + "_rmv_period.csv", index=False)
+            dfs[layer].to_csv("embeddings/" + "embeddings_with_labels_" + dataset_to_use + "_" + model_name.split("/")[-1] + "_" + str(abs(layer)) + "_rmv_period.csv", index=False)

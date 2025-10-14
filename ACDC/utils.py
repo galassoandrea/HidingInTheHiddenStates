@@ -2,9 +2,9 @@ import json
 import os
 import torch
 from typing import List, Optional, Callable
-from evaluation import kl_divergence, evaluate_factuality
+from .evaluation import kl_divergence, evaluate_factuality
 import numpy as np
-from ComputationalGraph import Node
+from .ComputationalGraph import Node
 
 def create_node_patching_hook(
         method,
