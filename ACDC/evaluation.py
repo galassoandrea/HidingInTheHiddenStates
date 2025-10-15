@@ -31,46 +31,35 @@ def evaluate_factuality(all_logits: List[torch.Tensor], all_labels, model):
     token_0_id = model.to_tokens("0", prepend_bos=False)[0, 0].item()
     token_1_id = model.to_tokens("1", prepend_bos=False)[0, 0].item()
 
-    # Process each batch
-    for logits_batch in all_logits:
+    # Process each logit tensor
+    for logits in all_logits:
         # logits_batch shape: [batch_size, seq_len, vocab_size]
-        batch_size = logits_batch.shape[0]
+        batch_size = logits.shape[0]
 
         # Extract logits for the next token (last position) for all samples in batch
-        next_token_logits = logits_batch[:, -1, :]  # Shape: [batch_size, vocab_size]
+        next_token_logits = logits[0, -1, :]
 
         # Extract logits for tokens '0' and '1' for all samples
         binary_logits = torch.stack([
-            next_token_logits[:, token_0_id],  # Logits for '0' across batch
-            next_token_logits[:, token_1_id]  # Logits for '1' across batch
-        ], dim=1)  # Shape: [batch_size, 2]
+            next_token_logits[token_0_id],  # Logits for '0' across batch
+            next_token_logits[token_1_id]  # Logits for '1' across batch
+        ])
 
         # Convert to probabilities for the entire batch
-        probs = torch.softmax(binary_logits, dim=1).cpu().numpy()  # Shape: [batch_size, 2]
+        probs = torch.softmax(binary_logits, dim=0).cpu().numpy()
 
         # Get predictions for the entire batch
-        predictions = np.argmax(probs, axis=1)  # Shape: [batch_size]
-        probs_positive = probs[:, 1]  # Probabilities of '1' for entire batch
+        predictions = np.argmax(probs)
+        probs_positive = probs[1]
 
-        all_predictions.extend(predictions.tolist())
-        all_probs_positive.extend(probs_positive.tolist())
+        all_predictions.append(predictions)
+        all_probs_positive.append(probs_positive)
 
-    # Flatten labels if they're still in batch format
-    flattened_labels = []
-    for label_batch in all_labels:
-        if isinstance(label_batch, torch.Tensor):
-            if label_batch.dim() > 0:  # If it's a batch
-                flattened_labels.extend(label_batch.cpu().numpy().tolist())
-            else:  # If it's a single value
-                flattened_labels.append(label_batch.item())
-        elif isinstance(label_batch, (list, np.ndarray)):
-            flattened_labels.extend(label_batch)
-        else:
-            flattened_labels.append(label_batch)
+    # Convert labels to numpy array
+    ground_truths = np.array(all_labels)
 
     # Convert to numpy arrays
     predictions = np.array(all_predictions)
-    ground_truths = np.array(flattened_labels)
     probs_positive = np.array(all_probs_positive)
 
     # Create probability matrix for log_loss

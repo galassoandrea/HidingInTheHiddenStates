@@ -106,14 +106,15 @@ def get_node_id(node: Node) -> str:
 def save_circuit(model_name, ablated_nodes: Optional[List[Node]] = None):
     # Store removed edges/nodes metadata in a json file
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+    # Go up one level to root, then into the save folder
+    ROOT_DIR = os.path.dirname(SCRIPT_DIR)
+    save_dir = os.path.join(ROOT_DIR, "removed_nodes")
     params_to_save = {
         "ablated_nodes": [
             {node.full_activation: node.head_idx}
             for node in ablated_nodes
         ]
     }
-    save_dir = os.path.join(SCRIPT_DIR, "removed_nodes")
-
     os.makedirs(save_dir, exist_ok=True)
 
     # Build full file path
@@ -123,10 +124,12 @@ def save_circuit(model_name, ablated_nodes: Optional[List[Node]] = None):
 
 def add_circuit_hooks(model, model_name):
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-    path = os.path.join(SCRIPT_DIR, f"removed_nodes", f"{model_name.replace('/', '-')}.json")
+    # Go up one level to root, then into the save folder
+    ROOT_DIR = os.path.dirname(SCRIPT_DIR)
+    path = os.path.join(ROOT_DIR, "removed_nodes", f"{model_name.replace('/', '-')}.json")
     with open(path, "r") as f:
         params = json.load(f)
-        print(f"Loaded removed nodes: {params}")
+        print(f"Added ablation hooks for nodes: {params['ablated_nodes']}")
     for node in params["ablated_nodes"]:
         for full_activation, head_idx in node.items():
             if "attn" in full_activation:
