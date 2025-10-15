@@ -70,9 +70,9 @@ list_of_datasets = [
 #get_task_performance(list_of_datasets)
 
 ## Run ACDC and extract a circuit
-#algorithm = ACDC(model, model_name, mode="greedy", method="patching", threshold=0.05)
+algorithm = ACDC(model, model_name, mode="greedy", method="patching", threshold=0.05)
 ##initial_graph = build_computational_graph(model, model_name)
-#circuit = algorithm.discover_circuit()
+circuit = algorithm.discover_circuit()
 ##visualize_computational_graph(initial_graph)
 ##visualize_computational_graph(circuit)
 #

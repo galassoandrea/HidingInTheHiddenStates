@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 import random
 from typing import List
@@ -32,8 +33,11 @@ class FactualityDatasetBuilder:
     def __init__(self, model):
         # Load each dataframe and create a combined dataframe with a topic column
         self.df = pd.DataFrame()
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        root_dir = os.path.dirname(script_dir)
         for topic in ["animals", "cities", "elements", "companies", "inventions"]:
-            df = pd.read_csv(f"../resources/{topic}_true_false.csv", nrows=10)
+            df_path = os.path.join(root_dir, "resources", f"{topic}_true_false.csv")
+            df = pd.read_csv(df_path, nrows=10)
             df["topic"] = topic
             self.df = pd.concat([self.df, df], ignore_index=True)
         self.model = model
