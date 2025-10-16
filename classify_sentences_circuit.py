@@ -39,7 +39,7 @@ parser = argparse.ArgumentParser(description="Parameterize LLM choice.")
 parser.add_argument("--rep", type=int, default=20)
 args = parser.parse_args()
 
-model_name = "EleutherAI/pythia-70m-deduped"
+model_name = "Qwen/Qwen3-0.6B"
 
 
 """
@@ -62,9 +62,10 @@ def correct_str(str_arr):
 check_uncommon = False
 check_generated = False
 repeat_each = args.rep
-#layer_num_list = [-1, -4, -8, -12, -16]
-layer_num_list = [-1, -2, -4]
+layer_num_list = [-1, -4, -8, -12, -16]
+#layer_num_list = [-1, -2, -4]
 
+model_components = "all"
 
 keep_probabilities = check_uncommon
 check_single_first = check_uncommon or check_generated
@@ -85,7 +86,7 @@ for layer_num_from_end in layer_num_list:
             datasets.append(pd.read_csv("reproduced/bert_" + dataset_name + ".csv"))
 
         else:
-            datasets.append(pd.read_csv('embeddings/embeddings_with_labels_'+dataset_name+'_'+model_name.split("/")[-1]+'_'+str(abs(layer_num_from_end))+'_rmv_period.csv'))
+            datasets.append(pd.read_csv('embeddings/embeddings_with_labels_'+dataset_name+'_'+model_name.split("/")[-1]+'-'+model_components+'_'+str(abs(layer_num_from_end))+'_rmv_period.csv'))
 
     results = []
     dataset_loop_length = 1 if check_single_first else len(dataset_names)

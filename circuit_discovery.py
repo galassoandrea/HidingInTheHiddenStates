@@ -16,7 +16,7 @@ def get_task_performance(list_of_datasets, batch_size=32):
         logits = []
 
         # Read the CSV file
-        df = pd.read_csv("resources/" + dataset_to_use + "_true_false.csv")
+        df = pd.read_csv("resources/" + dataset_to_use + "_true_false.csv", nrows=100)
 
         # Prepare data
         statements = df['statement'].str.rstrip(".").tolist()
@@ -47,15 +47,16 @@ def get_task_performance(list_of_datasets, batch_size=32):
     print(f"Overall factuality evaluation: ")
     evaluate_factuality(all_logits, all_labels, model)
 
-model_name = "EleutherAI/pythia-70m-deduped"
+#model_name = "EleutherAI/pythia-70m-deduped"
 # model_name = "meta-llama/Llama-2-7b-hf"
 # model_name = "google/gemma-2-2b-it"
-#model_name = "Qwen/Qwen3-0.6B"
+model_name = "Qwen/Qwen3-0.6B"
 
 model = HookedTransformer.from_pretrained(
     model_name,
     device="cuda" if torch.cuda.is_available() else "cpu"
 )
+
 
 list_of_datasets = [
     "animals",
@@ -70,14 +71,14 @@ list_of_datasets = [
 #get_task_performance(list_of_datasets)
 
 ## Run ACDC and extract a circuit
-algorithm = ACDC(model, model_name, mode="greedy", method="patching", threshold=0.05)
-##initial_graph = build_computational_graph(model, model_name)
-circuit = algorithm.discover_circuit()
+#algorithm = ACDC(model, model_name, mode="greedy", method="patching", threshold=0.05)
+#initial_graph = build_computational_graph(model, model_name)
+#circuit = algorithm.discover_circuit()
 ##visualize_computational_graph(initial_graph)
 ##visualize_computational_graph(circuit)
 #
 # Add hooks for removed (unimportant) nodes to the model, to run the model without those nodes
-add_circuit_hooks(model, model_name)
+#add_circuit_hooks(model, model_name)
 
 # Get ablated-model performance
 #get_task_performance(list_of_datasets)
