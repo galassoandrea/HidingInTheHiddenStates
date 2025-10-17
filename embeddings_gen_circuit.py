@@ -77,10 +77,10 @@ def generate_embeddings(model_path, full_model, list_of_datasets, layers_to_use,
                         dfs[layer].at[i, 'embeddings'] = [last_hidden_state.numpy().tolist()]
                         dfs[layer].at[i, 'next_id'] = next_id
                 print("processing: " + str(i) + ", next_token:" + str(next_id))
-                for layer in layers_to_use:
-                    dfs[layer].to_csv("embeddings/" + "embeddings_with_labels_" + dataset_to_use + "_" +
-                                      model_model_components.split("/")[-1] + "-" + model_components + "_" + str(abs(layer)) + "_rmv_period.csv",
-                                      index=False)
+            for layer in layers_to_use:
+                dfs[layer].to_csv("embeddings/" + "embeddings_with_labels_" + dataset_to_use + "_" +
+                                  model_path.split("/")[-1] + "-" + model_components + "_" + str(abs(layer)) + "_rmv_period.csv",
+                                  index=False)
 
 
 layers_to_use = [-1, -4, -8, -12, -16]
@@ -94,10 +94,10 @@ list_of_datasets = [
     "facts"
 ]
 
-#model_model_components = "meta-llama/Llama-2-7b-hf"
-model_model_components = "Qwen/Qwen3-0.6B"
-#model_model_components = "facebook/opt-6.7b"
-#model_model_components = "EleutherAI/pythia-70m-deduped"
+#model_name = "meta-llama/Llama-2-7b-hf"
+model_name = "Qwen/Qwen3-0.6B"
+#model_name = "facebook/opt-6.7b"
+#model_name = "EleutherAI/pythia-70m-deduped"
 
-generate_embeddings(model_path=model_model_components, full_model=True, list_of_datasets=list_of_datasets, layers_to_use=layers_to_use, remove_period=True)
+generate_embeddings(model_path=model_name, full_model=True, list_of_datasets=list_of_datasets, layers_to_use=layers_to_use, remove_period=True)
 
