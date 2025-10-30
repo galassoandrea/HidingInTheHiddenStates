@@ -5,6 +5,8 @@ from typing import List
 import pandas as pd
 import torch
 import torch.nn.functional as F
+from torch.utils.data import Dataset
+
 
 def pad_sequences(tokens: List[torch.Tensor], max_length) -> torch.Tensor:
     """Pad each token sequence to the maximum length in the batch"""
@@ -15,14 +17,30 @@ def pad_sequences(tokens: List[torch.Tensor], max_length) -> torch.Tensor:
     return torch.stack(padded_tokens, dim=0)
 
 
+class FactualityDataset(Dataset):
+    def __init__(self, examples):
+        """
+        Args:
+            examples: List of FactualityExample objects with pre-tokenized data
+        """
+        self.examples = examples
+
+    def __len__(self):
+        return len(self.examples)
+
+    def __getitem__(self, idx):
+        example = self.examples[idx]
+        return {
+            'clean_tokens': torch.tensor(example.clean_tokens, dtype=torch.long),
+            'corrupted_tokens': torch.tensor(example.corrupted_tokens, dtype=torch.long),
+            'label': torch.tensor(example.label, dtype=torch.long)
+        }
+
+
 @dataclass
 class FactualityExample:
     """Represents a single Factuality example"""
-    clean_statement: str
-    corrupted_statement: str
     label: int
-    clean_prompt: str
-    corrupted_prompt: str
     clean_tokens: List[str]
     corrupted_tokens: List[str]
 
@@ -43,15 +61,6 @@ class FactualityDatasetBuilder:
         self.model = model
         self.system_role = ("Is the following sentence true or false? Answer with 1 if the sentence is true and"
                             " 0 if the sentence is false: ")
-
-        # Pick 3 random elements from the dataset
-        self.examples = self.df.sample(n=3, random_state=42)
-
-        # Remove the 3 examples from the main dataframe
-        self.df = self.df.drop(self.examples.index).reset_index(drop=True)
-
-        # Convert examples to list of dicts
-        self.examples = self.examples.to_dict(orient="records")
 
         # Pools of elements for corruption
         self.animals = ['beaver', 'leopard', 'swan', 'polar bear', 'wolverine', 'salmon', 'rhinoceros', 'manta', 'gecko', 'giant anteater', 'snake', 'skunk', 'hippopotamus', 'cow', 'vulture', 'deer', 'sparrow', 'seagull', 'mongoose', 'rat', 'crocodile', 'flamingo', 'tapir', 'jellyfish', 'walrus', 'hedgehog', 'hamster', 'giraffe', 'ostrich', 'dog', 'slug', 'tortoise', 'hummingbird', 'tiger', 'camel', 'zebra', 'lobster', 'kangaroo', 'aardvark', 'dolphin', 'manta ray', 'tuna', 'elephant', 'peacock', 'goldfish', 'raccoon', 'alpaca', 'axolotl', 'armadillo']
@@ -145,31 +154,17 @@ class FactualityDatasetBuilder:
         sentence = " ".join(words)
         return sentence
 
-    def build_base_prompt(self):
-        """Builds the base prompt with system role and examples"""
-        prompt = self.system_role
-        for example in self.examples:
-            prompt += f'\nStatement: {example["statement"]}\nEvaluation: {example["label"]}\nNow judge the following statement.\n'
-        return prompt
-
     def build_single_prompt(self, example):
         """Builds a single prompt for a given example"""
-        #initial_prompt = self.build_base_prompt()
-        #clean_prompt = f'{initial_prompt}\nStatement: {example["statement"]}\nEvaluation: '
         clean_prompt = self.system_role + f'\nStatement: {example["statement"]}\nEvaluation: '
         corrupted_statement = self.corrupt_sentence(example["statement"], example["topic"])
-        #corrupted_prompt = f'{initial_prompt}\nStatement: {corrupted_statement}\nEvaluation: '
         corrupted_prompt = self.system_role + f'\nStatement: {corrupted_statement}\nEvaluation: '
         clean_tokens = self.model.to_tokens(clean_prompt, prepend_bos=True).squeeze(0)
         corrupted_tokens = self.model.to_tokens(corrupted_prompt, prepend_bos=True).squeeze(0)
         return FactualityExample(
-            clean_statement=example['statement'],
-            corrupted_statement=corrupted_statement,
             label=example['label'],
-            clean_prompt=clean_prompt,
-            corrupted_prompt=corrupted_prompt,
             clean_tokens=clean_tokens,
-            corrupted_tokens=corrupted_tokens,
+            corrupted_tokens=corrupted_tokens
         )
 
     def build_dataset(self):

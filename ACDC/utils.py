@@ -4,7 +4,8 @@ import torch
 from typing import List, Optional, Callable
 from .evaluation import kl_divergence, evaluate_factuality
 import numpy as np
-from .ComputationalGraph import Node
+from .ComputationalGraph import Node, Edge
+
 
 def create_node_patching_hook(
         method,
@@ -15,13 +16,12 @@ def create_node_patching_hook(
 
     def patching_hook(activation, hook):
         # Check the number of dimensions of the activation
-        if activation.dim() == 4:
-            # Attention layer (hook_z)
+        if node.name == "hook_result":
             patched_activation = activation
             if method == "patching":
-                patched_activation[:,:,node.head_idx,:] = corrupted_node_contribution
+                patched_activation[:,:,node.head_idx, :] = corrupted_node_contribution
             else:
-                patched_activation[:,:,node.head_idx,:] = 0
+                patched_activation[:,:,node.head_idx, :] = 0
         else:
             if method == "patching":
                 patched_activation = corrupted_node_contribution
@@ -31,11 +31,39 @@ def create_node_patching_hook(
 
     return patching_hook
 
+def create_edge_patching_hook(
+        method,
+        node: Node,
+        clean_sender_contribution: torch.Tensor,
+        corrupted_sender_contribution: Optional[torch.Tensor] = None
+) -> Callable:
+    """Create a hook function for edge pruning/patching."""
+
+    def patching_hook(activation, hook):
+        # Subtract sender's contribution from the output
+        if node.component_type == "attention":
+            patched_activation = activation
+            if method == "patching":
+                patched_activation[:,:,node.head_idx, :] = activation[:,:,node.head_idx, :] - clean_sender_contribution + corrupted_sender_contribution
+            else:
+                patched_activation[:,:,node.head_idx, :] = activation[:,:,node.head_idx, :] - clean_sender_contribution
+        else:
+            if method == "patching":
+                patched_activation = activation - clean_sender_contribution + corrupted_sender_contribution
+            else:
+                patched_activation = activation - clean_sender_contribution
+
+        return patched_activation
+
+    return patching_hook
+
 def add_all_hooks(
         model,
         i,
         clean_node_contributions,
-        ablated_nodes: Optional[List[Node]] = None
+        corrupted_node_contributions: Optional = None,
+        ablated_nodes: Optional[List[Node]] = None,
+        ablated_edges: Optional[List[Edge]] = None
 ):
     """Add hooks for all activations in the circuit."""
     if ablated_nodes != [] and ablated_nodes is not None:
@@ -47,12 +75,25 @@ def add_all_hooks(
             if hasattr(model, 'add_hook'):
                 model.add_hook(node.full_activation, hook)
 
+    if ablated_edges != [] and ablated_edges is not None:
+        for edge in ablated_edges:
+            hook = create_edge_patching_hook(
+                method="pruning",
+                node=edge.receiver,
+                clean_sender_contribution=clean_node_contributions[i],
+                corrupted_sender_contribution=corrupted_node_contributions[i]
+            )
+            if hasattr(model, 'add_hook'):
+                model.add_hook(edge.receiver.full_activation, hook)
+
 def get_final_performance(
         model,
         dataset,
         clean_logits,
         clean_node_contributions,
-        ablated_nodes: Optional[List[Node]] = None
+        corrupted_node_contributions: Optional = None,
+        ablated_nodes: Optional[List[Node]] = None,
+        ablated_edges: Optional[List[Edge]] = None
 ):
     """Get final performance after all edges/nodes have been evaluated."""
     kl_divs = []
@@ -64,8 +105,7 @@ def get_final_performance(
         model.reset_hooks()
 
         # Add all hooks for patched edges/nodes
-        add_all_hooks(model, i, clean_node_contributions,
-                       ablated_nodes)
+        add_all_hooks(model, i, clean_node_contributions, corrupted_node_contributions, ablated_nodes, ablated_edges)
 
         with torch.no_grad():
             ablated_logits = model(example.clean_tokens)
@@ -84,21 +124,31 @@ def get_final_performance(
     evaluate_factuality(logits, labels, model)
     return avg_kl_div
 
-def get_activations_name(model_name, layers):
+def get_activations_name(model_name, layers, target):
     names = []
-    if "pythia" in model_name:
-        hook_list = ["attn.hook_z", "hook_resid_pre", "hook_resid_post", "hook_mlp_out"]
+    if target == "node":
+        if "pythia" in model_name:
+            hook_list = ["attn.hook_result", "hook_resid_pre", "hook_resid_post", "hook_mlp_out"]
+        else:
+            hook_list = ["attn.hook_result", "hook_resid_pre", "hook_resid_mid", "hook_resid_post", "hook_mlp_out"]
+        for hook_name in hook_list:
+            hooks = [f"blocks.{l}.{hook_name}" for l in range(layers)]
+            names.extend(hooks)
     else:
-        hook_list = ["attn.hook_z", "hook_resid_pre", "hook_resid_mid", "hook_resid_post", "hook_mlp_out"]
-    for hook_name in hook_list:
-        hooks = [f"blocks.{l}.{hook_name}" for l in range(layers)]
-        names.extend(hooks)
+        hook_list = ["attn.hook_q_input", "attn.hook_result", "hook_resid_post", "hook_mlp_out", "hook_mlp_in"]
+        for hook_name in hook_list:
+            hooks = [f"blocks.{l}.{hook_name}" for l in range(layers)]
+            names.extend(hooks)
+            # Add embedding node
+            names.append("hook_embed")
     return names
 
 def get_node_id(node: Node) -> str:
     """Get the ID string for a given node."""
     if node.component_type == "attention":
         node_id = f"L{node.layer}-Head{node.head_idx}"
+    elif node.component_type == "embedding":
+        node_id = node.name
     else:
         node_id = f"L{node.layer}-{node.name.split('_', 1)[1]}"
     return node_id
