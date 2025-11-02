@@ -25,13 +25,12 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_curve, auc
-from sklearn.metrics import confusion_matrix, accuracy_score
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
+from sklearn.metrics import accuracy_score
 import time
-import tensorflow as tf
-import os
 import argparse
+from torch.utils.data import DataLoader
+from TransformerProbe import TransformerProbe, EmbeddingDataset
+from ACDC.ACDC import ACDC
 
 # Define argument parser
 parser = argparse.ArgumentParser(description="Parameterize LLM choice.")
@@ -100,26 +99,26 @@ for layer_num_from_end in layer_num_list:
         all_probs = np.zeros((len(test_df),1))
         for i in range(repeat_each):
 
-
             train_embeddings = np.array([np.fromstring(correct_str(embedding), sep=',') for embedding in train_df['embeddings'].tolist()])
             test_embeddings = np.array([np.fromstring(correct_str(embedding), sep=',') for embedding in test_df['embeddings'].tolist()])
             train_labels = np.array(train_df['label'])
             test_labels = np.array(test_df['label'])
 
+            # Create tensor datasets and dataloaders
+            train_dataset = EmbeddingDataset(train_embeddings, train_labels)
+            test_dataset = EmbeddingDataset(test_embeddings, test_labels)
+            train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+            test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
-            model = Sequential()
-            model.add(Dense(256, activation='relu', input_dim=train_embeddings.shape[1])) #change input_dim to match the number of elements in train_embeddings...
-            model.add(Dense(128, activation='relu'))
-            model.add(Dense(64, activation='relu'))
-            model.add(Dense(1, activation='sigmoid'))
-            model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy']) # Compile the model
+            # Create model
+            model = TransformerProbe(input_dim=train_embeddings.shape[1])
 
             # Train the model
-            model.fit(train_embeddings, train_labels, epochs=5, batch_size=32, validation_data=(test_embeddings, test_labels))
-            loss, accuracy = model.evaluate(test_embeddings, test_labels)
+            model.fit(train_loader, test_loader)
+            loss, accuracy = model.evaluate(test_loader)
 
             # Evaluate the model on the test data
-            test_pred_prob = model.predict(test_embeddings)
+            test_pred_prob = model.predict(test_loader)
 
             if keep_probabilities:
                 all_probs += test_pred_prob
@@ -128,18 +127,23 @@ for layer_num_from_end in layer_num_list:
             roc_auc = auc(fpr, tpr)
             print("AUC of the classifier on the test set:", roc_auc)
 
-
             # Find the optimal threshold
             X_val, X_test, y_val, y_test = train_test_split(test_embeddings, test_labels, test_size=0.7, random_state=42)
+
+            # Create tensor datasets and dataloaders
+            val_dataset = EmbeddingDataset(X_val, y_val)
+            test_dataset = EmbeddingDataset(X_test, y_test)
+            val_loader = DataLoader(val_dataset, batch_size=32, shuffle=True)
+            test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+
             # Evaluate the model on the test data
-            y_val_pred_prob = model.predict(X_val)
+            y_val_pred_prob = model.predict(val_loader)
 
             fpr_val, tpr_val, thresholds_val = roc_curve(y_val, y_val_pred_prob)  # Assuming binary classification
             optimal_threshold = thresholds_val[np.argmax([accuracy_score(y_val, y_val_pred_prob > thr) for thr in thresholds_val])]
 
-
             # Use the optimal threshold to predict labels on the test set
-            y_test_pred_prob = model.predict(X_test)
+            y_test_pred_prob = model.predict(test_loader)
             y_test_pred = (y_test_pred_prob > optimal_threshold).astype(int)
 
             # Evaluate the classifier on the test set

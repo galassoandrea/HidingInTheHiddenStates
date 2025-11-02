@@ -40,9 +40,9 @@ class FactualityDataset(Dataset):
 @dataclass
 class FactualityExample:
     """Represents a single Factuality example"""
-    label: int
     clean_tokens: List[str]
     corrupted_tokens: List[str]
+    label: int
 
 
 class FactualityDatasetBuilder:
@@ -162,9 +162,9 @@ class FactualityDatasetBuilder:
         clean_tokens = self.model.to_tokens(clean_prompt, prepend_bos=True).squeeze(0)
         corrupted_tokens = self.model.to_tokens(corrupted_prompt, prepend_bos=True).squeeze(0)
         return FactualityExample(
-            label=example['label'],
             clean_tokens=clean_tokens,
-            corrupted_tokens=corrupted_tokens
+            corrupted_tokens=corrupted_tokens,
+            label=example['label']
         )
 
     def build_dataset(self):

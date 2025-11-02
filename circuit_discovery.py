@@ -12,45 +12,61 @@ def get_task_performance(list_of_datasets, batch_size=32):
     all_logits = []
     all_labels = []
 
-    for dataset_to_use in list_of_datasets:
+    # Define the instruction prompt
+    #instruction = "Is the following sentence true or false? Answer with 1 if the sentence is true and with 0 if the sentence is false. Sentence: "
+    #suffix = " Evaluation: "
+
+    df_all = pd.DataFrame()
+    for d in list_of_datasets:
+        data = pd.read_csv("resources/" + d + "_true_false.csv", nrows=100)
+        data["topic"] = d
+        df_all = pd.concat([df_all, data], ignore_index=True)
+        # Create the prompt column
+        #df_all['prompt'] = instruction + df_all['statement'] + suffix
+
+    for topic in list_of_datasets:
+        df = df_all[df_all["topic"] == topic].copy()
         logits = []
 
-        # Read the CSV file
-        df = pd.read_csv("resources/" + dataset_to_use + "_true_false.csv", nrows=100)
-
-        # Prepare data
-        statements = df['statement'].str.rstrip(".").tolist()
+        prompts = df['statement'].tolist()
         labels = df['label'].tolist()
 
+        # Tokenize with padding
+        prompt_tokens = model.to_tokens(prompts, padding_side="left").to(model.cfg.device)
+
         # Process in batches
-        for i in tqdm(range(0, len(statements), batch_size), desc=f"Evaluating {dataset_to_use}"):
-            batch_statements = statements[i:i + batch_size]
+        for i in tqdm(range(0, len(prompt_tokens), batch_size), desc=f"Evaluating {topic}"):
+            batch = prompt_tokens[i:i + batch_size]
 
             with torch.no_grad():
-                # Tokenize batch with padding
-                prompt_tokens = model.to_tokens(batch_statements, padding_side="left").to(model.cfg.device)
-                output = model(prompt_tokens)
+                output = model(batch)
 
                 if hasattr(output, 'logits'):
                     batch_logits = output.logits
                 else:
                     batch_logits = output
 
-                # Store individual logits
-                for j in range(batch_logits.shape[0]):
-                    logits.append(batch_logits[j:j + 1].cpu())
+                last_token_logits = batch_logits[:, -1, :]
+                logits.append(last_token_logits.cpu())
 
-        print(f"Factuality evaluation for {dataset_to_use} dataset: ")
+        # Concatenate all batches at once
+        logits = torch.cat(logits, dim=0)
+
+        print(f"Factuality evaluation for {topic} dataset: ")
         evaluate_factuality(logits, labels, model)
-        all_logits.extend(logits)
+        all_logits.append(logits)
         all_labels.extend(labels)
+
+    # Concatenate all datasets
+    all_logits = torch.cat(all_logits, dim=0)
+
     print(f"Overall factuality evaluation: ")
     evaluate_factuality(all_logits, all_labels, model)
 
-model_name = "EleutherAI/pythia-14m"
+#model_name = "EleutherAI/pythia-70m-deduped"
 # model_name = "meta-llama/Llama-2-7b-hf"
 # model_name = "google/gemma-2-2b-it"
-#model_name = "Qwen/Qwen3-0.6B"
+model_name = "Qwen/Qwen3-0.6B"
 
 model = HookedTransformer.from_pretrained(
     model_name,
@@ -69,18 +85,18 @@ list_of_datasets = [
 ]
 
 # Get full-model performance for factuality task both on single dataframes and overall
-#get_task_performance(list_of_datasets)
+get_task_performance(list_of_datasets)
 
 ## Run ACDC and extract a circuit
 algorithm = ACDC(model, model_name, mode="greedy", method="patching", target="edge", threshold=0.05)
-initial_graph = build_computational_graph(model, model_name, granularity="head")
-visualize_computational_graph(initial_graph)
+#initial_graph = build_computational_graph(model, model_name, granularity="head")
+#visualize_computational_graph(initial_graph)
 
-circuit = algorithm.run()
+#circuit = algorithm.run()
 ##visualize_computational_graph(circuit)
 #
 # Add hooks for removed (unimportant) nodes to the model, to run the model without those nodes
-#add_circuit_hooks(model, model_name)
+add_circuit_hooks(model, model_name)
 
 # Get ablated-model performance
-#get_task_performance(list_of_datasets)
+get_task_performance(list_of_datasets)

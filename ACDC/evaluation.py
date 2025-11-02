@@ -1,8 +1,6 @@
-from typing import List
 import torch
 import torch.nn.functional as F
 import numpy as np
-from matplotlib import pyplot as plt
 from sklearn.metrics import accuracy_score, roc_auc_score, log_loss, roc_curve
 
 """Evaluation functions for circuit discovery and model outputs."""
@@ -19,76 +17,39 @@ def kl_divergence(clean_logits, corrupted_logits, dim: int = -1):
 
     return kl.mean()
 
-def evaluate_factuality(all_logits: List[torch.Tensor], all_labels, model):
+def evaluate_factuality(all_logits: torch.Tensor, all_labels, model):
     """
     Optimized version that works directly with batches.
     """
 
-    all_predictions = []
-    all_probs_positive = []
-
-    # Get token IDs for '0' and '1' - moved outside loop for efficiency
+    # Get token IDs for '0' and '1'
     token_0_id = model.to_tokens("0", prepend_bos=False)[0, 0].item()
     token_1_id = model.to_tokens("1", prepend_bos=False)[0, 0].item()
 
-    # Process each logit tensor
-    for logits in all_logits:
-        # logits_batch shape: [batch_size, seq_len, vocab_size]
-        batch_size = logits.shape[0]
+    # Extract logits at the last position for tokens "0" and "1"
+    logits_0 = all_logits[:, token_0_id]
+    logits_1 = all_logits[:, token_1_id]
 
-        # Extract logits for the next token (last position) for all samples in batch
-        next_token_logits = logits[0, -1, :]
+    # Stack logits for "0" and "1" into a 2D tensor
+    binary_logits = torch.stack([logits_0, logits_1], dim=1)
 
-        # Extract logits for tokens '0' and '1' for all samples
-        binary_logits = torch.stack([
-            next_token_logits[token_0_id],  # Logits for '0' across batch
-            next_token_logits[token_1_id]  # Logits for '1' across batch
-        ])
+    # Compute probabilities using softmax
+    probs = F.softmax(binary_logits, dim=1)
+    probs_1 = probs[:, 1].numpy()
 
-        # Convert to probabilities for the entire batch
-        probs = torch.softmax(binary_logits, dim=0).cpu().numpy()
+    # Get predictions: 1 if logit_1 > logit_0, else 0
+    predictions = (logits_1 > logits_0).long().numpy()
 
-        # Get predictions for the entire batch
-        predictions = np.argmax(probs)
-        probs_positive = probs[1]
+    # Convert labels to numpy if needed
+    labels_np = np.array(all_labels)
 
-        all_predictions.append(predictions)
-        all_probs_positive.append(probs_positive)
+    # Compute metrics
+    accuracy = accuracy_score(labels_np, predictions)
+    roc_auc = roc_auc_score(labels_np, probs_1)
 
-    # Convert labels to numpy array
-    ground_truths = np.array(all_labels)
-
-    # Convert to numpy arrays
-    predictions = np.array(all_predictions)
-    probs_positive = np.array(all_probs_positive)
-
-    # Create probability matrix for log_loss
-    probs_matrix = np.column_stack([1 - probs_positive, probs_positive])
-
-    # Calculate metrics
-    accuracy = accuracy_score(ground_truths, predictions)
-
-    # ROC-AUC (only if both classes are present)
-    try:
-        if len(np.unique(ground_truths)) > 1:
-            roc_auc = roc_auc_score(ground_truths, probs_positive)
-            fpr, tpr, _ = roc_curve(ground_truths, probs_positive)
-            plt.plot(fpr, tpr)
-        else:
-            roc_auc = float('nan')
-            print("Warning: Only one class present in labels, cannot compute ROC-AUC")
-    except Exception as e:
-        print(f"Warning: Could not compute ROC-AUC: {e}")
-        roc_auc = float('nan')
-
-    # Negative Log-Likelihood
-    try:
-        nll = log_loss(ground_truths, probs_matrix, labels=[0, 1])
-    except Exception as e:
-        print(f"Warning: Could not compute NLL: {e}")
-        nll = float('nan')
+    # Compute NLL (Negative Log-Likelihood)
+    # Convert labels to tensor for loss computation
+    labels_tensor = torch.tensor(all_labels, dtype=torch.long)
+    nll = F.cross_entropy(binary_logits, labels_tensor).item()
 
     print(f"Accuracy: {accuracy:.4f}, ROC-AUC: {roc_auc:.4f}, NLL: {nll:.4f}")
-
-    return {'accuracy': accuracy, 'roc_auc': roc_auc, 'nll': nll}
-
