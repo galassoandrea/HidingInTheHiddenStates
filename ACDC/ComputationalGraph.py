@@ -312,23 +312,22 @@ def add_nodes_block_level(graph, model_components, nodes_by_layer):
     # Add all other nodes (attention, MLP, residual connections)
     for full_activation in model_components:
         if full_activation.startswith("blocks."):
-            if "attn" in full_activation:
+            if "hook_result" in full_activation:
                 # Attention nodes
                 layer = int(full_activation.split('.')[1]) + 1
                 act_name = full_activation.rsplit(".", 1)[1]
-                if act_name == "hook_result":
-                    for head_idx in range(n_heads):
-                        node = Node(
-                            name=act_name,
-                            layer=layer,
-                            component_type="attention",
-                            head_idx=head_idx,
-                            full_activation=full_activation
-                        )
-                        graph.add_node(node)
-                        if "attention" not in nodes_by_layer[layer]:
-                            nodes_by_layer[layer]["attention"] = []
-                        nodes_by_layer[layer]["attention"].append(node)
+                for head_idx in range(n_heads):
+                    node = Node(
+                        name=act_name,
+                        layer=layer,
+                        component_type="attention",
+                        head_idx=head_idx,
+                        full_activation=full_activation
+                    )
+                    graph.add_node(node)
+                    if "attention" not in nodes_by_layer[layer]:
+                        nodes_by_layer[layer]["attention"] = []
+                    nodes_by_layer[layer]["attention"].append(node)
             elif "mlp_out" in full_activation:
                 # MLP nodes
                 layer = int(full_activation.split('.')[1]) + 1

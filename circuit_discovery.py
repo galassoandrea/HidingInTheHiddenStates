@@ -1,7 +1,7 @@
 import torch
 from tqdm import tqdm
 from transformer_lens import HookedTransformer
-from ACDC.ACDC import ACDC
+from ACDC.ACDC import ACDCNode
 from ACDC.utils import add_circuit_hooks
 from ACDC.evaluation import evaluate_factuality
 from ACDC.ComputationalGraph import build_computational_graph, ComputationalGraph
@@ -12,17 +12,11 @@ def get_task_performance(list_of_datasets, batch_size=32):
     all_logits = []
     all_labels = []
 
-    # Define the instruction prompt
-    #instruction = "Is the following sentence true or false? Answer with 1 if the sentence is true and with 0 if the sentence is false. Sentence: "
-    #suffix = " Evaluation: "
-
     df_all = pd.DataFrame()
     for d in list_of_datasets:
         data = pd.read_csv("resources/" + d + "_true_false.csv", nrows=100)
         data["topic"] = d
         df_all = pd.concat([df_all, data], ignore_index=True)
-        # Create the prompt column
-        #df_all['prompt'] = instruction + df_all['statement'] + suffix
 
     for topic in list_of_datasets:
         df = df_all[df_all["topic"] == topic].copy()
@@ -63,10 +57,10 @@ def get_task_performance(list_of_datasets, batch_size=32):
     print(f"Overall factuality evaluation: ")
     evaluate_factuality(all_logits, all_labels, model)
 
-#model_name = "EleutherAI/pythia-70m-deduped"
+model_name = "EleutherAI/pythia-14m"
 # model_name = "meta-llama/Llama-2-7b-hf"
 # model_name = "google/gemma-2-2b-it"
-model_name = "Qwen/Qwen3-0.6B"
+#model_name = "Qwen/Qwen3-0.6B"
 
 model = HookedTransformer.from_pretrained(
     model_name,
@@ -85,18 +79,18 @@ list_of_datasets = [
 ]
 
 # Get full-model performance for factuality task both on single dataframes and overall
-get_task_performance(list_of_datasets)
+#get_task_performance(list_of_datasets)
 
 ## Run ACDC and extract a circuit
-algorithm = ACDC(model, model_name, mode="greedy", method="patching", target="edge", threshold=0.05)
+algorithm = ACDCNode(model, model_name, mode="greedy", method="patching", threshold=0.05)
 #initial_graph = build_computational_graph(model, model_name, granularity="head")
 #visualize_computational_graph(initial_graph)
 
-#circuit = algorithm.run()
+circuit = algorithm.run()
 ##visualize_computational_graph(circuit)
 #
 # Add hooks for removed (unimportant) nodes to the model, to run the model without those nodes
-add_circuit_hooks(model, model_name)
+#add_circuit_hooks(model, model_name)
 
 # Get ablated-model performance
 get_task_performance(list_of_datasets)

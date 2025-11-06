@@ -28,7 +28,7 @@ from ACDC.utils import add_circuit_hooks
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
-def generate_embeddings(model_path, full_model, list_of_datasets, layers_to_use, remove_period=True):
+def generate_embeddings_for_training(model_path, full_model, list_of_datasets, layers_to_use, remove_period=True):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     if full_model:
         model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.float16).to(device)
@@ -82,16 +82,48 @@ def generate_embeddings(model_path, full_model, list_of_datasets, layers_to_use,
                                   model_path.split("/")[-1] + "-" + model_components + "_" + str(abs(layer)) + "_rmv_period.csv",
                                   index=False)
 
+def generate_embeddings_for_circuit_discovery(model_path, list_of_datasets, layers_to_use, remove_period=True):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.float16).to(device)
+    tokenizer = AutoTokenizer.from_pretrained(model_path)
+
+    dfs: Dict[int, pd.DataFrame] = {}
+
+    with torch.no_grad():
+        for dataset_to_use in list_of_datasets:
+            # Read the CSV file
+            df = pd.read_csv("resources/" + dataset_to_use + "_clean_corrupted.csv")
+            for layer in layers_to_use:
+                dfs[layer] = df.copy()
+
+            for type in ['clean', 'corrupted']:
+                for i, row in df.iterrows():
+                    prompt = row[f'{type}_statement']
+                    if remove_period:
+                        prompt = prompt.rstrip(". ")
+                    inputs = tokenizer(prompt, return_tensors="pt")
+                    outputs = model.generate(inputs.input_ids.to(device), output_hidden_states=True,
+                                             return_dict_in_generate=True, max_new_tokens=1, min_new_tokens=1)
+                    generate_ids = outputs[0].cpu()
+                    next_id = np.array(generate_ids)[0][-1]
+                    for layer in layers_to_use:
+                        last_hidden_state = outputs.hidden_states[0][layer][0][-1].cpu()
+                        dfs[layer].at[i, f'{type}_statement'] = [last_hidden_state.numpy().tolist()]
+                    print("processing: " + str(i) + " " + type + ", next_token:" + str(next_id))
+            for layer in layers_to_use:
+                dfs[layer].to_csv("embeddings/" + "embeddings_with_labels_" + dataset_to_use + "_" +
+                                  model_path.split("/")[-1] + "-clean-corrupted_" + str(abs(layer)) + "_rmv_period.csv",
+                                  index=False)
+
 
 layers_to_use = [-1, -4, -8, -12, -16]
-#layers_to_use = [-1, -2, -4]
 list_of_datasets = [
     "animals",
     "cities",
     "elements",
     "companies",
     "inventions",
-    "facts"
+    #"facts"
 ]
 
 #model_name = "meta-llama/Llama-2-7b-hf"
@@ -99,5 +131,8 @@ model_name = "Qwen/Qwen3-0.6B"
 #model_name = "facebook/opt-6.7b"
 #model_name = "EleutherAI/pythia-70m-deduped"
 
-generate_embeddings(model_path=model_name, full_model=True, list_of_datasets=list_of_datasets, layers_to_use=layers_to_use, remove_period=True)
+# Generate embeddings for training and testing probes and for circuit discovery on probes
+#generate_embeddings_for_training(model_path=model_name, full_model=True, list_of_datasets=list_of_datasets, layers_to_use=layers_to_use, remove_period=True)
+generate_embeddings_for_circuit_discovery(model_path=model_name, list_of_datasets=list_of_datasets, layers_to_use=layers_to_use, remove_period=True)
+
 

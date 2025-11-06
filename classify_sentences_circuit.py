@@ -59,43 +59,23 @@ def correct_str(str_arr):
     val_to_ret = str_arr.replace("[array(", "").replace("dtype=float32)]", "").replace("\n","").replace(" ","").replace("],","]").replace("[","").replace("]","")
     return val_to_ret
 
-check_uncommon = False
-check_generated = False
 repeat_each = args.rep
 layer_num_list = [-1, -4, -8, -12, -16]
 
 model_components = "all"
 
-keep_probabilities = check_uncommon
-check_single_first = check_uncommon or check_generated
 overall_res = []
 start_time = time.time()
 for layer_num_from_end in layer_num_list:
-
-    if check_uncommon:
-        dataset_names = ["uncommon", "cities", "inventions", "elements", "animals", "facts", "companies"]
-    elif check_generated:
-        dataset_names = ["generated", "cities", "inventions", "elements", "animals", "facts", "companies"]
-    else:
-        dataset_names = ["cities", "inventions", "elements", "animals", "companies", "facts"]
+    dataset_names = ["cities", "inventions", "elements", "animals", "companies", "facts"]
     datasets = []
     for dataset_name in dataset_names:
-        if layer_num_from_end == "BERT":
-
-            datasets.append(pd.read_csv("reproduced/bert_" + dataset_name + ".csv"))
-
-        else:
-            datasets.append(pd.read_csv('embeddings/embeddings_with_labels_'+dataset_name+'_'+model_name.split("/")[-1]+'-'+model_components+'_'+str(abs(layer_num_from_end))+'_rmv_period.csv'))
+        datasets.append(pd.read_csv('embeddings/embeddings_with_labels_'+dataset_name+'_'+model_name.split("/")[-1]+'-'+model_components+'_'+str(abs(layer_num_from_end))+'_rmv_period.csv'))
 
     results = []
-    dataset_loop_length = 1 if check_single_first else len(dataset_names)
-    for ds in range(dataset_loop_length):
-        if check_single_first:
-            test_df = datasets[0]
-            dfs_to_concatenate = datasets[1:]  # excluding "capitals" [2:]
-        else:
-            test_df = datasets[ds]
-            dfs_to_concatenate = datasets[:ds] + datasets[ds + 1:]
+    for ds in range(len(dataset_names)):
+        test_df = datasets[ds]
+        dfs_to_concatenate = datasets[:ds] + datasets[ds + 1:]
         train_df = pd.concat(dfs_to_concatenate, ignore_index=True)
         all_probs = np.zeros((len(test_df),1))
         for i in range(repeat_each):
@@ -120,9 +100,6 @@ for layer_num_from_end in layer_num_list:
 
             # Evaluate the model on the test data
             test_pred_prob = model.predict(test_embeddings)
-
-            if keep_probabilities:
-                all_probs += test_pred_prob
 
             fpr, tpr, _ = roc_curve(test_labels, test_pred_prob)  # Assuming binary classification
             roc_auc = auc(fpr, tpr)
@@ -155,7 +132,7 @@ for layer_num_from_end in layer_num_list:
         print("----end probs----")
 
     print(results)
-    for ds in range(dataset_loop_length):
+    for ds in range(len(dataset_names)):
         relevant_results_portion = results[repeat_each*ds:repeat_each*(ds+1)]
         # Extract the second item from each tuple and put it in a list
         acc_list = [t[2] for t in relevant_results_portion]

@@ -1,20 +1,24 @@
+import ast
+import pandas as pd
+from sklearn.metrics import roc_auc_score, accuracy_score
 from .utils import *
 from .evaluation import kl_divergence
 import numpy as np
 from tqdm import tqdm
-from .FactualityDatasetBuilder import FactualityDatasetBuilder
 from .ComputationalGraph import Node, build_computational_graph
 
 
-class ACDC:
+class ACDCNode:
     """
     Automatic Circuit Discovery (ACDC) Algorithm
     for finding minimal circuits responsible for specific tasks.
+    Node-level version.
     """
 
     def __init__(self, model, model_name,
                  mode: str = "greedy",
-                 method: str = "pruning", target: str = "node", threshold: float = 0.1):
+                 method: str = "patching",
+                 threshold: float = 0.1):
 
         self.model = model
         self.model_name = model_name
@@ -22,31 +26,30 @@ class ACDC:
         self.device = model.cfg.device
         self.mode = mode
         self.method = method
-        self.target = target
 
         # Initialize graphs
         self.full_graph = None
         self.circuit = None
 
         # Cache for model activations and logits
-        self.clean_logits = []
-        self.clean_node_contributions = {}
-        self.corrupted_node_contributions = {}
         self.ablated_nodes = []
-        self.ablated_edges = []
 
         # Create dataset
-        print("Building Factuality dataset...")
-        dataset_builder = FactualityDatasetBuilder(model)
-        self.dataset = dataset_builder.build_dataset()
-        # Keep only first 10 examples for testing
-        self.dataset = self.dataset[:50]
+        print("Loading Factuality dataset...")
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        root_dir = os.path.dirname(script_dir)
+        self.dataset = pd.DataFrame()
+        for topic in ["animals", "cities", "elements", "companies", "inventions"]:
+            df_path = os.path.join(root_dir, "resources", f"{topic}_clean_corrupted.csv")
+            df = pd.read_csv(df_path, nrows=10)
+            df["topic"] = topic
+            self.dataset = pd.concat([self.dataset, df], ignore_index=True)
 
     def run(self):
-        """ Main mode to perform circuit discovery using edge pruning. """
+        """ Main method to perform circuit discovery. """
 
         print(f"Building computational graph for {self.model_name}...")
-        granularity = "block" if self.target == "node" else "head"
+        granularity = "block"
         self.full_graph = build_computational_graph(self.model, self.model_name, granularity)
         self.circuit = self.full_graph.copy()
         ordered_nodes = self.circuit.topological_sort()
@@ -54,37 +57,41 @@ class ACDC:
         print(f"Total nodes: {len(ordered_nodes)}")
         print(f"Total edges: {len(self.circuit.edges)}")
 
-        clean_caches = []
-        corrupted_caches = []
+        # Pre-tokenize dataset examples
+        clean_tokens = self.model.to_tokens(self.dataset['clean_statement'].tolist()).to(self.device)
+        corrupted_tokens = self.model.to_tokens(self.dataset['corrupted_statement'].tolist()).to(self.device)
+        # Pad to max length
+        max_len = max(clean_tokens.shape[1], corrupted_tokens.shape[1])
+        clean_tokens = torch.nn.functional.pad(
+            clean_tokens,
+            (0, max_len - clean_tokens.shape[1]),
+            value=self.model.tokenizer.pad_token_id
+        )
+        corrupted_tokens = torch.nn.functional.pad(
+            corrupted_tokens,
+            (0, max_len - corrupted_tokens.shape[1]),
+            value=self.model.tokenizer.pad_token_id
+        )
 
         # Collect clean and corrupted reference outputs and caches
-        act_names = get_activations_name(self.model_name, self.model.cfg.n_layers, target=self.target)
-        for example in tqdm(self.dataset, desc="Collecting reference outputs"):
-            with torch.no_grad():
-                clean_inputs = example.clean_tokens
-                # Cache activations and keep only needed ones
-                l_clean, c_clean = self.model.run_with_cache(clean_inputs, return_type="logits", names_filter=act_names)
-                l_clean = l_clean.cpu()
-                self.clean_logits.append(l_clean)
-                clean_caches.append(c_clean)
-                if self.method == "patching":
-                    # Also collect corrupted outputs for activation patching
-                    corrupted_inputs = example.corrupted_tokens
-                    _, c_corr = self.model.run_with_cache(corrupted_inputs, return_type="logits", names_filter=act_names)
-                    corrupted_caches.append(c_corr)
-
+        act_names = get_activations_name(self.model_name, self.model.cfg.n_layers, target="node")
+        with torch.no_grad():
+            # Cache activations and keep only needed ones
+            clean_logits, clean_caches = self.model.run_with_cache(clean_tokens, return_type="logits", names_filter=act_names)
+            clean_logits = clean_logits.cpu()
+            if self.method == "patching":
+                # Also collect corrupted outputs for activation patching
+                _, corrupted_caches = self.model.run_with_cache(corrupted_tokens, return_type="logits",
+                                                                    names_filter=act_names)
         # Precompute node contributions for all examples
-        self.precompute_node_contributions(clean_caches, corrupted_caches)
-        # Clear memory from caches since we don't need them anymore
+        if self.method == "patching":
+            _, corrupted_node_contributions = precompute_node_contributions(self.full_graph, self.method, self.device, granularity, clean_caches, corrupted_caches)
+            del corrupted_caches
         del clean_caches
-        del corrupted_caches
         # Clear gpu
         torch.cuda.empty_cache()
 
-        if self.target == "node":
-            self.circuit_discovery_node(ordered_nodes)
-        else:
-            self.circuit_discovery_edge(ordered_nodes)
+        self.circuit_discovery(ordered_nodes, clean_tokens, clean_logits, corrupted_node_contributions=corrupted_node_contributions if self.method == "patching" else None)
 
         # Clear gpu
         torch.cuda.empty_cache()
@@ -92,18 +99,17 @@ class ACDC:
         # Compute final KL divergence (add all hooks at the same time)
         kl_score = get_final_performance(
             model=self.model,
-            dataset=self.dataset,
-            clean_logits=self.clean_logits,
-            clean_node_contributions=self.clean_node_contributions,
-            corrupted_node_contributions=self.corrupted_node_contributions,
+            clean_tokens=clean_tokens,
+            clean_labels=self.dataset['label'].tolist(),
+            clean_logits=clean_logits,
             ablated_nodes=self.ablated_nodes
         )
 
         print(f"Final KL divergence: {kl_score:.6f}")
-        save_circuit(self.model_name, self.ablated_nodes)
+        save_removed_components(self.model_name, self.ablated_nodes)
         return self.circuit
 
-    def circuit_discovery_node(self, ordered_nodes):
+    def circuit_discovery(self, ordered_nodes, clean_tokens, clean_logits, corrupted_node_contributions: Optional = None):
         print(f"Starting node evaluation with threshold: {self.threshold}")
         nodes_removed_this_iter = 1
         total_nodes_removed = 0
@@ -118,24 +124,23 @@ class ACDC:
                         print(f"Evaluating node: {node_id}")
                         # Temporarily remove the node
                         kl_divs = []
-                        for i, example in enumerate(self.dataset):
-                            clean_tokens = example.clean_tokens
+                        for i in range(len(clean_tokens)):
                             if self.method == "patching":
                                 patched_logits = self.run_with_node_patching(
-                                    inputs=clean_tokens,
+                                    inputs=clean_tokens[i],
                                     i=i,
                                     node_to_patch=node,
-                                    corrupted_node_contributions=self.corrupted_node_contributions,
+                                    corrupted_node_contributions=corrupted_node_contributions,
                                     ablated_nodes=self.ablated_nodes
                                 )
                             else:
                                 patched_logits = self.run_with_node_patching(
-                                    inputs=clean_tokens,
+                                    inputs=clean_tokens[i],
                                     i=i,
                                     node_to_patch=node,
                                     ablated_nodes=self.ablated_nodes
                                 )
-                            kl_div = kl_divergence(self.clean_logits[i].to(self.device), patched_logits)
+                            kl_div = kl_divergence(clean_logits[i].to(self.device), patched_logits)
                             kl_divs.append(kl_div.item())
                         avg_kl_div = np.mean(kl_divs)
                         print(f"Avg KL Divergence = {avg_kl_div:.6f}")
@@ -156,24 +161,23 @@ class ACDC:
                             print(f"Evaluating node: {node_id}")
                             # Temporarily remove the node
                             kl_divs = []
-                            for i, example in enumerate(self.dataset):
-                                clean_tokens = example.clean_tokens
+                            for i in range(len(clean_tokens)):
                                 if self.method == "patching":
                                     patched_logits = self.run_with_node_patching(
-                                        inputs=clean_tokens,
+                                        inputs=clean_tokens[i],
                                         i=i,
                                         node_to_patch=node,
-                                        corrupted_node_contributions=self.corrupted_node_contributions,
+                                        corrupted_node_contributions=corrupted_node_contributions,
                                         ablated_nodes=self.ablated_nodes
                                     )
                                 else:
                                     patched_logits = self.run_with_node_patching(
-                                        inputs=clean_tokens,
+                                        inputs=clean_tokens[i],
                                         i=i,
                                         node_to_patch=node,
                                         ablated_nodes=self.ablated_nodes
                                     )
-                                kl_div = kl_divergence(self.clean_logits[i].to(self.device), patched_logits)
+                                kl_div = kl_divergence(clean_logits[i].to(self.device), patched_logits)
                                 kl_divs.append(kl_div.item())
                             avg_kl_div = np.mean(kl_divs)
                             print(f"Avg KL Divergence = {avg_kl_div:.6f}")
@@ -190,71 +194,6 @@ class ACDC:
             print(f"\nCircuit discovery complete!")
             print(f"Nodes removed: {total_nodes_removed}")
             print(f"Final circuit nodes: {len(self.circuit.nodes)}")
-
-    def circuit_discovery_edge(self, ordered_nodes):
-        print(f"Starting edge evaluation with threshold: {self.threshold}")
-        # Iterate through nodes and prune edges
-        edges_removed_this_iter = 1
-        total_edges_removed = 0
-        iteration = 0
-        while edges_removed_this_iter > 0:
-            edges_removed_this_iter = 0
-            iteration += 1
-            print(f"--- Starting iteration {iteration} ---")
-            for receiver in tqdm(ordered_nodes, desc="Evaluating edges"):
-                receiver_id = get_node_id(receiver)
-                senders = self.circuit.get_senders(receiver).copy()
-                if senders != [] and senders is not None:
-                    for sender in senders:
-                        print(sender.full_activation)
-                        sender_id = get_node_id(sender)
-                        if receiver.name == "hook_q":
-                            print(f"Evaluating edge: {sender_id} -> {receiver_id}")
-                        else:
-                            print(f"Evaluating edge: {sender_id} -> {receiver_id}")
-                        edge = Edge(sender, receiver)
-                        # Temporarily remove the edge
-                        kl_divs = []
-                        for i, example in enumerate(self.dataset):
-                            clean_tokens = example.clean_tokens
-                            # Ablate the edge by zeroing out the sender's contribution (not the whole activation) only on receiver
-                            if self.method == "patching":
-                                patched_logits = self.run_with_edge_patching(
-                                    inputs=clean_tokens,
-                                    i=i,
-                                    edge_to_patch=edge,
-                                    clean_node_contributions=self.clean_node_contributions,
-                                    corrupted_node_contributions=self.corrupted_node_contributions,
-                                    ablated_edges=self.ablated_edges
-                                )
-                            else:
-                                patched_logits = self.run_with_edge_patching(
-                                    inputs=clean_tokens,
-                                    i=i,
-                                    edge_to_patch=edge,
-                                    clean_node_contributions=self.clean_node_contributions,
-                                    ablated_edges=self.ablated_edges
-                                )
-                            kl_div = kl_divergence(self.clean_logits[i].to(self.device), patched_logits)
-                            kl_divs.append(kl_div.item())
-                        avg_kl_div = np.mean(kl_divs)
-                        print(f"Avg KL Divergence = {avg_kl_div:.6f}")
-                        if avg_kl_div < self.threshold:
-                            self.circuit.remove_edge(edge)
-                            edges_removed_this_iter += 1
-                            self.ablated_edges.append(edge)
-                            # Only remove sender from ordered_nodes if it has no more receivers
-                            if len(self.circuit.get_receivers(edge.sender)) == 0:
-                                ordered_nodes.remove(edge.sender)
-                            print(f"Edge removed.")
-            total_edges_removed += edges_removed_this_iter
-            print(f"Edges removed this iteration: {edges_removed_this_iter}")
-
-        # Print summary of results
-        print(f"\nCircuit discovery complete!")
-        print(f"Edges removed: {total_edges_removed}")
-        print(f"Final circuit edges: {len(self.circuit.edges)}")
-
 
     def run_with_node_patching(
             self,
@@ -284,7 +223,7 @@ class ACDC:
         patching_hook = create_node_patching_hook(
             self.method,
             node_to_patch,
-            corrupted_node_contributions[(node_id, i)] if corrupted_node_contributions else None
+            corrupted_node_contributions[node_id][i].unsqueeze(0) if corrupted_node_contributions else None
         )
 
         # Register hook on the node
@@ -296,6 +235,257 @@ class ACDC:
             patched_logits = self.model(inputs)
 
         return patched_logits
+
+    def evaluate_circuit(self, test_data):
+        all_preds = []
+        all_probs = []
+        statements, labels = test_data
+        # Tokenize dataset
+        clean_tokens = self.model.to_tokens(statements).to(self.device)
+        # Pad to max length
+        max_len = max(clean_tokens.shape[1])
+        clean_tokens = torch.nn.functional.pad(
+            clean_tokens,
+            (0, max_len - clean_tokens.shape[1]),
+            value=self.model.tokenizer.pad_token_id
+        )
+        print("Evaluating circuit on test data...")
+        with torch.no_grad():
+            # Cache activations and keep only needed ones
+            act_names = get_activations_name(self.model_name, self.model.cfg.n_layers, target="edge")
+            _, clean_caches = self.model.run_with_cache(clean_tokens, return_type="logits", names_filter=act_names)
+        # Precompute node contributions for all examples
+        clean_node_contributions, _ = precompute_node_contributions(self.full_graph, "pruning", self.device, "block", clean_caches)
+        # Clear memory from caches since we don't need them anymore
+        del clean_caches
+        # Clear gpu
+        torch.cuda.empty_cache()
+        # Iterate over examples, run with ablation hooks and compute metrics
+        for i in range(len(clean_tokens)):
+            # Add all hooks for patched edges
+            add_all_hooks(self.model, i, clean_node_contributions, ablated_nodes=self.ablated_nodes)
+            # Run forward pass
+            with torch.no_grad():
+                inputs = clean_tokens[i]
+                patched_logits = self.model(inputs)
+                logits = patched_logits[0, -1, :]  # last token's logits (shape: [2])
+                probs = torch.softmax(logits, dim=-1)[1].item()  # class 1 probability
+                pred = int(probs > 0.5)
+                all_probs.append(probs)
+                all_preds.append(pred)
+        # Reset all hooks
+        self.model.reset_hooks()
+        # Compute metrics
+        accuracy = accuracy_score(labels, all_preds)
+        roc_auc = roc_auc_score(labels, all_probs)
+        print(f"Accuracy of the circuit on the test set: {accuracy:.4f}")
+        print(f"ROC-AUC of the circuit on the test set: {roc_auc:.4f}")
+
+
+class ACDCEdge:
+    """
+    Automatic Circuit Discovery (ACDC) Algorithm
+    for finding minimal circuits responsible for specific tasks.
+    Edge-level version.
+    """
+
+    def __init__(self, model, model_name,
+                 mode: str = "greedy",
+                 method: str = "patching", embedding_dataset: pd.DataFrame = None,
+                 threshold: float = 0.05):
+
+        self.model = model
+        self.model_name = model_name
+        self.threshold = threshold
+        self.device = model.cfg.device
+        self.mode = mode
+        self.method = method
+
+        # Initialize graphs
+        self.full_graph = None
+        self.circuit = None
+
+        self.ablated_edges = []
+
+        # Create dataset
+        print("Loading Factuality dataset...")
+        if embedding_dataset is not None:
+            self.dataset = embedding_dataset
+            self.tokenize = False
+        else:
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            root_dir = os.path.dirname(script_dir)
+            self.dataset = pd.DataFrame()
+            for topic in ["animals", "cities", "elements", "companies", "inventions"]:
+                df_path = os.path.join(root_dir, "resources", f"{topic}_clean_corrupted.csv")
+                df = pd.read_csv(df_path, nrows=10)
+                df["topic"] = topic
+                self.dataset = pd.concat([self.dataset, df], ignore_index=True)
+            self.tokenize = True
+
+    def run(self):
+        """ Main method to perform circuit discovery. """
+
+        print(f"Building computational graph for {self.model_name}...")
+        granularity = "head"
+        self.full_graph = build_computational_graph(self.model, self.model_name, granularity)
+        self.circuit = self.full_graph.copy()
+        ordered_nodes = self.circuit.topological_sort()
+
+        print(f"Total nodes: {len(ordered_nodes)}")
+        print(f"Total edges: {len(self.circuit.edges)}")
+
+        # Pre-tokenize dataset examples
+        # Check the type of clean_statement and corrupted_statement columns and tokenize only if they are strings
+        if self.tokenize:
+            clean_tokens = self.model.to_tokens(self.dataset['clean_statement'].tolist()).to(self.device)
+            corrupted_tokens = self.model.to_tokens(self.dataset['corrupted_statement'].tolist()).to(self.device)
+            # Pad to max length
+            max_len = max(clean_tokens.shape[1], corrupted_tokens.shape[1])
+            clean_tokens = torch.nn.functional.pad(
+                clean_tokens,
+                (0, max_len - clean_tokens.shape[1]),
+                value=self.model.tokenizer.pad_token_id
+            )
+            corrupted_tokens = torch.nn.functional.pad(
+                corrupted_tokens,
+                (0, max_len - corrupted_tokens.shape[1]),
+                value=self.model.tokenizer.pad_token_id
+            )
+            # Chek type to ensure they are tensors
+            if not isinstance(clean_tokens, torch.Tensor):
+                raise ValueError("Clean tokens are not a torch.Tensor")
+        else:
+            clean_tokens = [ast.literal_eval(x) if isinstance(x, str) else x
+                          for x in self.dataset['clean_statement'].tolist()]
+            corrupted_tokens = [ast.literal_eval(x) if isinstance(x, str) else x
+                              for x in self.dataset['corrupted_statement'].tolist()]
+            clean_tokens = torch.tensor(clean_tokens).to(self.device)
+            corrupted_tokens = torch.tensor(corrupted_tokens).to(self.device)
+
+        # Collect clean and corrupted reference outputs and caches
+        act_names = get_activations_name(self.model_name, self.model.cfg.n_layers, target="edge")
+        with torch.no_grad():
+            if self.tokenize:
+                # Cache activations and keep only needed ones
+                clean_logits, clean_caches = self.model.run_with_cache(clean_tokens, return_type="logits", names_filter=act_names)
+                clean_logits = clean_logits.cpu()
+                if self.method == "patching":
+                    # Also collect corrupted outputs for activation patching
+                    _, corrupted_caches = self.model.run_with_cache(corrupted_tokens, return_type="logits",
+                                                                    names_filter=act_names)
+            else:
+                # In case of embeddings dataset, since the inputs are embeddings,
+                # we need to replace the embedding layer activations with our embeddings.
+                # To do this, we need to create dummy tokens and use a forward hook to replace the embeddings.
+                dummy_tokens = torch.zeros_like(clean_tokens).long().to(self.device)
+
+                def embedding_replacement_hook(activations, hook):
+                    return clean_tokens
+
+                # Run with cache, replacing embeddings via hook
+                with self.model.hooks(fwd_hooks=[("hook_embed", embedding_replacement_hook)]):
+                    clean_logits, clean_caches = self.model.run_with_cache(dummy_tokens)
+                clean_logits = clean_logits.cpu()
+                if self.method == "patching":
+                    # Also collect corrupted outputs for activation patching
+                    # Run with cache, replacing embeddings via hook
+                    def embedding_replacement_hook(activations, hook):
+                        return corrupted_tokens
+
+                    with self.model.hooks(fwd_hooks=[("hook_embed", embedding_replacement_hook)]):
+                        _, corrupted_caches = self.model.run_with_cache(dummy_tokens)
+        # Precompute node contributions for all examples
+        if self.method == "patching":
+            clean_node_contributions, corrupted_node_contributions = precompute_node_contributions(self.full_graph, self.method, self.device, granularity, clean_caches, corrupted_caches)
+        else:
+            clean_node_contributions, corrupted_node_contributions = precompute_node_contributions(self.full_graph, self.method, self.device, granularity, clean_caches)
+        # Clear memory from caches since we don't need them anymore
+        del clean_caches
+        del corrupted_caches
+        # Clear gpu
+        torch.cuda.empty_cache()
+
+        self.circuit_discovery(ordered_nodes, clean_tokens, clean_logits, clean_node_contributions, corrupted_node_contributions)
+
+        # Clear gpu
+        torch.cuda.empty_cache()
+
+        # Compute final KL divergence (add all hooks at the same time)
+        kl_score = get_final_performance(
+            model=self.model,
+            tokenize=self.tokenize,
+            clean_tokens=clean_tokens,
+            clean_labels=self.dataset['label'].tolist(),
+            clean_logits=clean_logits,
+            clean_node_contributions=clean_node_contributions,
+            ablated_edges=self.ablated_edges
+        )
+
+        print(f"Final KL divergence: {kl_score:.6f}")
+        return self.circuit
+
+    def circuit_discovery(self, ordered_nodes, clean_tokens, clean_logits, clean_node_contributions, corrupted_node_contributions):
+        print(f"Starting edge evaluation with threshold: {self.threshold}")
+        # Iterate through nodes and prune edges
+        edges_removed_this_iter = 1
+        total_edges_removed = 0
+        iteration = 0
+        while edges_removed_this_iter > 0:
+            edges_removed_this_iter = 0
+            iteration += 1
+            print(f"--- Starting iteration {iteration} ---")
+            for receiver in tqdm(ordered_nodes, desc="Evaluating edges"):
+                receiver_id = get_node_id(receiver)
+                senders = self.circuit.get_senders(receiver).copy()
+                if senders != [] and senders is not None:
+                    for sender in senders:
+                        sender_id = get_node_id(sender)
+                        if receiver.name == "hook_q":
+                            print(f"Evaluating edge: {sender_id} -> {receiver_id}")
+                        else:
+                            print(f"Evaluating edge: {sender_id} -> {receiver_id}")
+                        edge = Edge(sender, receiver)
+                        # Temporarily remove the edge
+                        kl_divs = []
+                        for i in range(len(clean_tokens)):
+                            # Ablate the edge by zeroing out the sender's contribution (not the whole activation) only on receiver
+                            if self.method == "patching":
+                                patched_logits = self.run_with_edge_patching(
+                                    inputs=clean_tokens[i],
+                                    i=i,
+                                    edge_to_patch=edge,
+                                    clean_node_contributions=clean_node_contributions,
+                                    corrupted_node_contributions=corrupted_node_contributions,
+                                    ablated_edges=self.ablated_edges
+                                )
+                            else:
+                                patched_logits = self.run_with_edge_patching(
+                                    inputs=clean_tokens[i],
+                                    i=i,
+                                    edge_to_patch=edge,
+                                    clean_node_contributions=clean_node_contributions,
+                                    ablated_edges=self.ablated_edges
+                                )
+                            kl_div = kl_divergence(clean_logits[i].to(self.device), patched_logits)
+                            kl_divs.append(kl_div.item())
+                        avg_kl_div = np.mean(kl_divs)
+                        print(f"Avg KL Divergence = {avg_kl_div:.6f}")
+                        if avg_kl_div < self.threshold:
+                            self.circuit.remove_edge(edge)
+                            edges_removed_this_iter += 1
+                            self.ablated_edges.append(edge)
+                            # Only remove sender from ordered_nodes if it has no more receivers
+                            if len(self.circuit.get_receivers(edge.sender)) == 0:
+                                ordered_nodes.remove(edge.sender)
+                            print(f"Edge removed.")
+            total_edges_removed += edges_removed_this_iter
+            print(f"Edges removed this iteration: {edges_removed_this_iter}")
+
+        # Print summary of results
+        print(f"\nCircuit discovery complete!")
+        print(f"Edges removed: {total_edges_removed}")
+        print(f"Final circuit edges: {len(self.circuit.edges)}")
 
     def run_with_edge_patching(
             self,
@@ -318,8 +508,7 @@ class ACDC:
                 hook = create_edge_patching_hook(
                     method="pruning",
                     node=edge.receiver,
-                    clean_sender_contribution=clean_node_contributions[(node_id, i)],
-                    corrupted_sender_contribution=corrupted_node_contributions[(node_id, i)] if corrupted_node_contributions else None
+                    clean_sender_contribution=clean_node_contributions[node_id][i].unsqueeze(0)
                 )
                 if hasattr(self.model, 'add_hook'):
                     self.model.add_hook(edge.receiver.full_activation, hook)
@@ -329,46 +518,103 @@ class ACDC:
         patching_hook = create_edge_patching_hook(
             method=self.method,
             node=edge_to_patch.receiver,
-            clean_sender_contribution=clean_node_contributions[(node_id, i)],
-            corrupted_sender_contribution=corrupted_node_contributions[
-                (node_id, i)] if corrupted_node_contributions else None
+            clean_sender_contribution=clean_node_contributions[node_id][i].unsqueeze(0),
+            corrupted_sender_contribution=corrupted_node_contributions[node_id][i].unsqueeze(0) if corrupted_node_contributions else None
         )
 
-        # Register hook on the node
-        if hasattr(self.model, 'add_hook'):
-            self.model.add_hook(edge_to_patch.receiver.full_activation, patching_hook)
+        if not self.tokenize:
+            # In case of embeddings dataset, since the inputs are embeddings,
+            # we need to replace the embedding layer activations with our embeddings.
+            # To do this, we need to create dummy tokens and use a forward hook to replace the embeddings.
+            dummy_tokens = torch.zeros_like(inputs).long().to(self.device)
+            def embedding_replacement_hook(activations, hook):
+                return inputs
+            # Register hook on the node
+            if hasattr(self.model, 'add_hook'):
+                self.model.add_hook("hook_embed", embedding_replacement_hook)
+                self.model.add_hook(edge_to_patch.receiver.full_activation, patching_hook)
+            # Run forward pass
+            with torch.no_grad():
+                patched_logits = self.model(dummy_tokens)
+        else:
+            # Register hook on the node
+            if hasattr(self.model, 'add_hook'):
+                self.model.add_hook(edge_to_patch.receiver.full_activation, patching_hook)
 
-        # Run forward pass
-        with torch.no_grad():
-            patched_logits = self.model(inputs)
+            # Run forward pass
+            with torch.no_grad():
+                patched_logits = self.model(inputs)
 
         return patched_logits
 
-    def precompute_node_contributions(self, clean_caches, corrupted_caches):
-        """Precompute all node contributions for all examples."""
+    def evaluate_circuit(self, test_data):
+        all_preds = []
+        all_probs = []
+        statements, labels = test_data
+        # Tokenize dataset if not already tokenized
+        if self.tokenize:
+            clean_tokens = self.model.to_tokens(statements).to(self.device)
+            # Pad to max length
+            max_len = max(clean_tokens.shape[1])
+            clean_tokens = torch.nn.functional.pad(
+                clean_tokens,
+                (0, max_len - clean_tokens.shape[1]),
+                value=self.model.tokenizer.pad_token_id
+            )
+        else:
+            clean_tokens = [ast.literal_eval(x) if isinstance(x, str) else x
+                            for x in statements]
+            clean_tokens = torch.tensor(np.array(clean_tokens)).to(self.device)
+        print("Evaluating circuit on test data...")
+        with torch.no_grad():
+            if self.tokenize:
+                # Cache activations and keep only needed ones
+                act_names = get_activations_name(self.model_name, self.model.cfg.n_layers, target="edge")
+                _, clean_caches = self.model.run_with_cache(clean_tokens, return_type="logits", names_filter=act_names)
+            else:
+                # In case of embeddings dataset, since the inputs are embeddings,
+                # we need to replace the embedding layer activations with our embeddings.
+                # To do this, we need to create dummy tokens and use a forward hook to replace the embeddings.
+                dummy_tokens = torch.zeros_like(clean_tokens).long().to(self.device)
 
-        for i, example in enumerate(self.dataset):
-            for node in self.full_graph.nodes:
-                node_id = get_node_id(node)
-                if node.name == "embed":
-                    contribution = clean_caches[i][node.full_activation]
-                    self.clean_node_contributions[(node_id, i)] = contribution.to(self.device)
-                    if self.method == "patching":
-                        corrupted_contribution = corrupted_caches[i][node.full_activation]
-                        self.corrupted_node_contributions[(node_id, i)] = corrupted_contribution.to(self.device)
-                if node.component_type == "attention":
-                    clean_activation = clean_caches[i][node.full_activation]
-                    clean_contribution = clean_activation[:, :, node.head_idx, :].to(self.device)
-                    self.clean_node_contributions[(node_id, i)] = clean_contribution.to(self.device)
-                    if self.method == "patching":
-                        corrupted_activation = corrupted_caches[i][node.full_activation]
-                        corrupted_contribution = corrupted_activation[:, :, node.head_idx, :].to(self.device)
-                        self.corrupted_node_contributions[(node_id, i)] = corrupted_contribution.to(self.device)
-                else:
-                    contribution = clean_caches[i][node.full_activation]
-                    self.clean_node_contributions[(node_id, i)] = contribution.to(self.device)
-                    if self.method == "patching":
-                        corrupted_contribution = corrupted_caches[i][node.full_activation]
-                        self.corrupted_node_contributions[(node_id, i)] = corrupted_contribution.to(self.device)
+                def embedding_replacement_hook(activations, hook):
+                    return clean_tokens
+
+                # Run with cache, replacing embeddings via hook
+                with self.model.hooks(fwd_hooks=[("hook_embed", embedding_replacement_hook)]):
+                    _, clean_caches = self.model.run_with_cache(dummy_tokens)
+
+        # Precompute node contributions for all examples
+        clean_node_contributions, _ = precompute_node_contributions(self.full_graph, "pruning", self.device, "head", clean_caches)
+        # Clear memory from caches since we don't need them anymore
+        del clean_caches
+        # Clear gpu
+        torch.cuda.empty_cache()
+        # Iterate over examples, run with ablation hooks and compute metrics
+        for i in range(len(clean_tokens)):
+            if not self.tokenize:
+                inputs = torch.zeros_like(clean_tokens[i]).long().to(self.device)
+                def embedding_replacement_hook(activations, hook):
+                    return clean_tokens[i]
+                # Register embedding replacement hook on the node
+                if hasattr(self.model, 'add_hook'):
+                    self.model.add_hook("hook_embed", embedding_replacement_hook)
+            # Add all hooks for patched edges
+            add_all_hooks(self.model, i, clean_node_contributions, ablated_edges=self.ablated_edges)
+            # Run forward pass
+            with torch.no_grad():
+                patched_logits = self.model(inputs)
+                logits = patched_logits[0, -1, :]  # last token's logits (shape: [2])
+                probs = torch.softmax(logits, dim=-1)[1].item()  # class 1 probability
+                pred = int(probs > 0.5)
+                all_probs.append(probs)
+                all_preds.append(pred)
+        # Reset all hooks
+        self.model.reset_hooks()
+        # Compute metrics
+        accuracy = accuracy_score(labels, all_preds)
+        roc_auc = roc_auc_score(labels, all_probs)
+        print(f"Accuracy of the circuit on the test set: {accuracy:.4f}")
+        print(f"ROC-AUC of the circuit on the test set: {roc_auc:.4f}")
 
 
