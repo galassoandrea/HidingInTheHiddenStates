@@ -7,27 +7,29 @@ import numpy as np
 from .ComputationalGraph import Node, Edge
 
 
-def precompute_node_contributions(graph, method, device, granularity, clean_caches, corrupted_caches: Optional = None):
+def precompute_node_contributions(graph, device, granularity, clean_caches: Optional = None, corrupted_caches: Optional = None):
     """Precompute all node contributions for all examples."""
-    clean_node_contributions = {}
-    corrupted_node_contributions = {}
+    clean_node_contributions = {} if clean_caches is not None else None
+    corrupted_node_contributions = {} if corrupted_caches is not None else None
     for node in graph.nodes:
         node_id = get_node_id(node)
         if node.component_type == "embedding":
             if granularity == "head":
                 clean_node_contributions[node_id] = clean_caches[node.full_activation].to(device)
-                if method == "patching":
+                if corrupted_caches is not None:
                     corrupted_node_contributions[node_id] = corrupted_caches[node.full_activation].to(device)
         elif node.component_type == "attention":
-            clean_activation = clean_caches[node.full_activation]
-            clean_node_contributions[node_id] = clean_activation[:, :, node.head_idx, :].to(device)
-            if method == "patching":
+            if clean_caches is not None:
+                clean_activation = clean_caches[node.full_activation]
+                clean_node_contributions[node_id] = clean_activation[:, :, node.head_idx, :].to(device)
+            if corrupted_caches is not None:
                 corrupted_activation = corrupted_caches[node.full_activation]
                 corrupted_node_contributions[node_id] = corrupted_activation[:, :, node.head_idx, :].to(
                     device)
         else:
-            clean_node_contributions[node_id] = clean_caches[node.full_activation].to(device)
-            if method == "patching":
+            if clean_caches is not None:
+                clean_node_contributions[node_id] = clean_caches[node.full_activation].to(device)
+            if corrupted_caches is not None:
                 corrupted_node_contributions[node_id] = corrupted_caches[node.full_activation].to(device)
     return clean_node_contributions, corrupted_node_contributions
 
@@ -273,43 +275,3 @@ def add_circuit_hooks(model, model_name):
                 node=node
             ))
     print(f"Added ablation hooks for nodes: {params['ablated_nodes']}")
-
-def evaluate_pruned_model(model, model_name, test_data):
-    edges_to_prune = load_removed_components(model_name)
-    for edge in edges_to_prune["ablated_edges"]:
-
-        for full_activation, head_idx in edge.items():
-            if "attn" in full_activation:
-                layer = int(full_activation.split('.')[1]) + 1
-                act_name = full_activation.rsplit(".", 1)[1]
-                head_idx = head_idx
-                node = Node(
-                    name=act_name,
-                    layer=layer,
-                    component_type="attention",
-                    head_idx=head_idx,
-                    full_activation=full_activation
-                )
-            elif "mlp_out" in full_activation:
-                layer = int(full_activation.split('.')[1]) + 1
-                act_name = full_activation.rsplit(".", 1)[1]
-                node = Node(
-                    name=act_name,
-                    layer=layer,
-                    component_type="mlp",
-                    full_activation=full_activation
-                )
-            elif "resid" in full_activation:
-                # Residual nodes
-                layer = int(full_activation.split('.')[1]) + 1
-                act_name = full_activation.rsplit(".", 1)[1]
-                node = Node(
-                    name=act_name,
-                    layer=layer,
-                    component_type="residual",
-                    full_activation=full_activation
-                )
-            model.add_hook(edge.receiver.full_activation, create_node_patching_hook(
-                method="pruning",
-                node=node
-            ))

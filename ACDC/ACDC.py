@@ -74,20 +74,40 @@ class ACDCNode:
         )
 
         # Collect clean and corrupted reference outputs and caches
+        batch_size = 8
+        clean_logits_list = []
+        corrupted_caches_list = [] if self.method == "patching" else None
         act_names = get_activations_name(self.model_name, self.model.cfg.n_layers, target="node")
-        with torch.no_grad():
-            # Cache activations and keep only needed ones
-            clean_logits, clean_caches = self.model.run_with_cache(clean_tokens, return_type="logits", names_filter=act_names)
-            clean_logits = clean_logits.cpu()
+        with (torch.no_grad()):
+            for i in range(0, len(self.dataset), batch_size):
+                batch_clean = clean_tokens[i:i + batch_size]
+                batch_corrupted = corrupted_tokens[i:i + batch_size]
+
+                # Run a forward pass and collect clean logits (we don't need clean caches for node patching)
+                batch_logits = self.model(batch_clean, return_type="logits")
+                clean_logits_list.append(batch_logits.cpu())
+
+                if self.method == "patching":
+                    # Run a forward pass and collect corrupted caches (these are needed for node patching)
+                    _, batch_corrupted_cache = self.model.run_with_cache(
+                        batch_corrupted,
+                        return_type="logits",
+                        names_filter=act_names
+                    )
+                    corrupted_caches_list.append({k: v.cpu() for k, v in batch_corrupted_cache.items()})
+
+                # Clear GPU cache
+                torch.cuda.empty_cache()
+
+            # Concatenate results
+            clean_logits = torch.cat(clean_logits_list, dim=0)
             if self.method == "patching":
-                # Also collect corrupted outputs for activation patching
-                _, corrupted_caches = self.model.run_with_cache(corrupted_tokens, return_type="logits",
-                                                                    names_filter=act_names)
+                corrupted_caches = {k: torch.cat([cache[k] for cache in corrupted_caches_list], dim=0)
+                                    for k in corrupted_caches_list[0].keys()}
         # Precompute node contributions for all examples
         if self.method == "patching":
-            _, corrupted_node_contributions = precompute_node_contributions(self.full_graph, self.method, self.device, granularity, clean_caches, corrupted_caches)
+            _, corrupted_node_contributions = precompute_node_contributions(self.full_graph, self.device, granularity, corrupted_caches=corrupted_caches)
             del corrupted_caches
-        del clean_caches
         # Clear gpu
         torch.cuda.empty_cache()
 
@@ -154,41 +174,41 @@ class ACDCNode:
                 print(f"Nodes removed this iteration: {nodes_removed_this_iter}")
             else:
                 # Iterate through nodes and ablate them
-                    for node in tqdm(ordered_nodes, desc="Evaluating nodes"):
-                        if node.name in ['hook_resid_pre', 'hook_resid_mid', 'hook_resid_post', 'hook_mlp_out',
-                                         'hook_result']:
-                            node_id = get_node_id(node)
-                            print(f"Evaluating node: {node_id}")
-                            # Temporarily remove the node
-                            kl_divs = []
-                            for i in range(len(clean_tokens)):
-                                if self.method == "patching":
-                                    patched_logits = self.run_with_node_patching(
-                                        inputs=clean_tokens[i],
-                                        i=i,
-                                        node_to_patch=node,
-                                        corrupted_node_contributions=corrupted_node_contributions,
-                                        ablated_nodes=self.ablated_nodes
-                                    )
-                                else:
-                                    patched_logits = self.run_with_node_patching(
-                                        inputs=clean_tokens[i],
-                                        i=i,
-                                        node_to_patch=node,
-                                        ablated_nodes=self.ablated_nodes
-                                    )
-                                kl_div = kl_divergence(clean_logits[i].to(self.device), patched_logits)
-                                kl_divs.append(kl_div.item())
-                            avg_kl_div = np.mean(kl_divs)
-                            print(f"Avg KL Divergence = {avg_kl_div:.6f}")
-                            if avg_kl_div < self.threshold:
-                                self.circuit.remove_node(node)
-                                ordered_nodes.remove(node)
-                                nodes_removed_this_iter += 1
-                                self.ablated_nodes.append(node)
-                                print(f"Node removed.")
-                    total_nodes_removed += nodes_removed_this_iter
-                    print(f"Nodes removed this iteration: {nodes_removed_this_iter}")
+                for node in tqdm(ordered_nodes, desc="Evaluating nodes"):
+                    if node.name in ['hook_resid_pre', 'hook_resid_mid', 'hook_resid_post', 'hook_mlp_out',
+                                     'hook_result']:
+                        node_id = get_node_id(node)
+                        print(f"Evaluating node: {node_id}")
+                        # Temporarily remove the node
+                        kl_divs = []
+                        for i in range(len(clean_tokens)):
+                            if self.method == "patching":
+                                patched_logits = self.run_with_node_patching(
+                                    inputs=clean_tokens[i],
+                                    i=i,
+                                    node_to_patch=node,
+                                    corrupted_node_contributions=corrupted_node_contributions,
+                                    ablated_nodes=self.ablated_nodes
+                                )
+                            else:
+                                patched_logits = self.run_with_node_patching(
+                                    inputs=clean_tokens[i],
+                                    i=i,
+                                    node_to_patch=node,
+                                    ablated_nodes=self.ablated_nodes
+                                )
+                            kl_div = kl_divergence(clean_logits[i].to(self.device), patched_logits)
+                            kl_divs.append(kl_div.item())
+                        avg_kl_div = np.mean(kl_divs)
+                        print(f"Avg KL Divergence = {avg_kl_div:.6f}")
+                        if avg_kl_div < self.threshold:
+                            self.circuit.remove_node(node)
+                            ordered_nodes.remove(node)
+                            nodes_removed_this_iter += 1
+                            self.ablated_nodes.append(node)
+                            print(f"Node removed.")
+                total_nodes_removed += nodes_removed_this_iter
+                print(f"Nodes removed this iteration: {nodes_removed_this_iter}")
 
             # Print summary of results
             print(f"\nCircuit discovery complete!")
@@ -397,9 +417,9 @@ class ACDCEdge:
                         _, corrupted_caches = self.model.run_with_cache(dummy_tokens)
         # Precompute node contributions for all examples
         if self.method == "patching":
-            clean_node_contributions, corrupted_node_contributions = precompute_node_contributions(self.full_graph, self.method, self.device, granularity, clean_caches, corrupted_caches)
+            clean_node_contributions, corrupted_node_contributions = precompute_node_contributions(self.full_graph, self.device, granularity, clean_caches, corrupted_caches)
         else:
-            clean_node_contributions, corrupted_node_contributions = precompute_node_contributions(self.full_graph, self.method, self.device, granularity, clean_caches)
+            clean_node_contributions, corrupted_node_contributions = precompute_node_contributions(self.full_graph, self.device, granularity, clean_caches)
         # Clear memory from caches since we don't need them anymore
         del clean_caches
         del corrupted_caches
