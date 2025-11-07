@@ -133,6 +133,7 @@ class ACDCNode:
         print(f"Starting node evaluation with threshold: {self.threshold}")
         nodes_removed_this_iter = 1
         total_nodes_removed = 0
+        batch_size = 16
         while nodes_removed_this_iter > 0:
             nodes_removed_this_iter = 0
             # Run circuit discovery based on the model
@@ -144,10 +145,10 @@ class ACDCNode:
                         print(f"Evaluating node: {node_id}")
                         # Temporarily remove the node
                         kl_divs = []
-                        for i in range(len(clean_tokens)):
+                        for i in range(0, len(self.dataset), batch_size):
                             if self.method == "patching":
                                 patched_logits = self.run_with_node_patching(
-                                    inputs=clean_tokens[i],
+                                    inputs=clean_tokens[i:i + batch_size],
                                     i=i,
                                     node_to_patch=node,
                                     corrupted_node_contributions=corrupted_node_contributions,
@@ -155,12 +156,12 @@ class ACDCNode:
                                 )
                             else:
                                 patched_logits = self.run_with_node_patching(
-                                    inputs=clean_tokens[i],
+                                    inputs=clean_tokens[i:i + batch_size],
                                     i=i,
                                     node_to_patch=node,
                                     ablated_nodes=self.ablated_nodes
                                 )
-                            kl_div = kl_divergence(clean_logits[i].to(self.device), patched_logits)
+                            kl_div = kl_divergence(clean_logits[i:i+batch_size].to(self.device), patched_logits)
                             kl_divs.append(kl_div.item())
                         avg_kl_div = np.mean(kl_divs)
                         print(f"Avg KL Divergence = {avg_kl_div:.6f}")
@@ -181,10 +182,10 @@ class ACDCNode:
                         print(f"Evaluating node: {node_id}")
                         # Temporarily remove the node
                         kl_divs = []
-                        for i in range(len(clean_tokens)):
+                        for i in range(0, len(self.dataset), batch_size):
                             if self.method == "patching":
                                 patched_logits = self.run_with_node_patching(
-                                    inputs=clean_tokens[i],
+                                    inputs=clean_tokens[i:i + batch_size],
                                     i=i,
                                     node_to_patch=node,
                                     corrupted_node_contributions=corrupted_node_contributions,
@@ -192,12 +193,12 @@ class ACDCNode:
                                 )
                             else:
                                 patched_logits = self.run_with_node_patching(
-                                    inputs=clean_tokens[i],
+                                    inputs=clean_tokens[i:i + batch_size],
                                     i=i,
                                     node_to_patch=node,
                                     ablated_nodes=self.ablated_nodes
                                 )
-                            kl_div = kl_divergence(clean_logits[i].to(self.device), patched_logits)
+                            kl_div = kl_divergence(clean_logits[i:i+batch_size].to(self.device), patched_logits)
                             kl_divs.append(kl_div.item())
                         avg_kl_div = np.mean(kl_divs)
                         print(f"Avg KL Divergence = {avg_kl_div:.6f}")
@@ -224,6 +225,7 @@ class ACDCNode:
             ablated_nodes: Optional[List[Node]] = None
     ) -> torch.Tensor:
         """Run model with node patching."""
+        batch_size = inputs.shape[0]
 
         # Clear previous hooks
         self.model.reset_hooks()
@@ -243,7 +245,7 @@ class ACDCNode:
         patching_hook = create_node_patching_hook(
             self.method,
             node_to_patch,
-            corrupted_node_contributions[node_id][i].unsqueeze(0) if corrupted_node_contributions else None
+            corrupted_node_contributions[node_id][i:i+batch_size] if corrupted_node_contributions else None
         )
 
         # Register hook on the node

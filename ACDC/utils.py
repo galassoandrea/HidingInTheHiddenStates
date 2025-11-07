@@ -36,23 +36,27 @@ def precompute_node_contributions(graph, device, granularity, clean_caches: Opti
 def create_node_patching_hook(
         method,
         node: Node,
-        corrupted_node_contribution: Optional[torch.Tensor] = None
+        corrupted_contributions: Optional[torch.Tensor] = None
 ) -> Callable:
     """Create a hook function for node ablation/patching."""
 
     def patching_hook(activation, hook):
-        # Check the number of dimensions of the activation
         if node.name == "hook_result":
-            patched_activation = activation
+            # activation shape: [batch_size, seq_len, n_heads, d_head]
+            patched_activation = activation.clone()
             if method == "patching":
-                patched_activation[:,:,node.head_idx, :] = corrupted_node_contribution
+                # batched_corrupted_contribution: [batch_size, seq_len, d_head]
+                patched_activation[:, :, node.head_idx, :] = corrupted_contributions
             else:
-                patched_activation[:,:,node.head_idx, :] = 0
+                patched_activation[:, :, node.head_idx, :] = 0
         else:
+            # activation shape: [batch_size, seq_len, d_model] or similar
             if method == "patching":
-                patched_activation = corrupted_node_contribution
+                # batched_corrupted_contribution: [batch_size, seq_len, d_model]
+                patched_activation = corrupted_contributions
             else:
-                patched_activation = 0
+                patched_activation = torch.zeros_like(activation)
+
         return patched_activation
 
     return patching_hook

@@ -57,10 +57,10 @@ def get_task_performance(list_of_datasets, batch_size=32):
     print(f"Overall factuality evaluation: ")
     evaluate_factuality(all_logits, all_labels, model)
 
-#model_name = "EleutherAI/pythia-14m"
+model_name = "EleutherAI/pythia-14m"
 # model_name = "meta-llama/Llama-2-7b-hf"
 # model_name = "google/gemma-2-2b-it"
-model_name = "Qwen/Qwen3-0.6B"
+#model_name = "Qwen/Qwen3-0.6B"
 
 # Load the model
 model = HookedTransformer.from_pretrained(
