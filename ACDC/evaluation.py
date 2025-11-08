@@ -8,12 +8,15 @@ from sklearn.metrics import accuracy_score, roc_auc_score, log_loss, roc_curve
 def kl_divergence(clean_logits, corrupted_logits, dim: int = -1):
     """Compute KL divergence between two logit distributions: KL(P || Q)."""
     # Convert logits to probability distributions
-    log_probs_a = F.log_softmax(clean_logits, dim=dim)  # log P
-    log_probs_b = F.log_softmax(corrupted_logits, dim=dim)  # log Q
-    probs_a = log_probs_a.exp()  # P
+    log_probs_clean = F.log_softmax(clean_logits, dim=dim)  # log P
+    log_probs_corrupted = F.log_softmax(corrupted_logits, dim=dim)  # log Q
+    probs_clean = log_probs_clean.exp()  # P
 
     # KL(P || Q) = sum P * (logP - logQ)
-    kl = torch.sum(probs_a * (log_probs_a - log_probs_b), dim=dim)
+    kl = torch.sum(probs_clean * (log_probs_clean - log_probs_corrupted), dim=dim)
+
+    if kl.dim() > 1:
+        kl = kl.mean(dim=-1)
 
     return kl.mean()
 

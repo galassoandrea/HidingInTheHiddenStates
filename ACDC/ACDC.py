@@ -110,7 +110,6 @@ class ACDCNode:
             del corrupted_caches
         # Clear gpu
         torch.cuda.empty_cache()
-
         self.circuit_discovery(ordered_nodes, clean_tokens, clean_logits, corrupted_node_contributions=corrupted_node_contributions if self.method == "patching" else None)
 
         # Clear gpu
@@ -133,13 +132,13 @@ class ACDCNode:
         print(f"Starting node evaluation with threshold: {self.threshold}")
         nodes_removed_this_iter = 1
         total_nodes_removed = 0
-        batch_size = 16
+        batch_size = 8
         while nodes_removed_this_iter > 0:
             nodes_removed_this_iter = 0
             # Run circuit discovery based on the model
             if "pythia" in self.model_name:
                 # Iterate through nodes and ablate them
-                for node in tqdm(ordered_nodes, desc="Evaluating nodes"):
+                for node in tqdm(list(ordered_nodes), desc="Evaluating nodes"):
                     if node.name in ['hook_resid_pre', 'hook_resid_post', 'hook_mlp_out', 'hook_result']:
                         node_id = get_node_id(node)
                         print(f"Evaluating node: {node_id}")
@@ -175,7 +174,7 @@ class ACDCNode:
                 print(f"Nodes removed this iteration: {nodes_removed_this_iter}")
             else:
                 # Iterate through nodes and ablate them
-                for node in tqdm(ordered_nodes, desc="Evaluating nodes"):
+                for node in tqdm(list(ordered_nodes), desc="Evaluating nodes"):
                     if node.name in ['hook_resid_pre', 'hook_resid_mid', 'hook_resid_post', 'hook_mlp_out',
                                      'hook_result']:
                         node_id = get_node_id(node)
@@ -211,10 +210,10 @@ class ACDCNode:
                 total_nodes_removed += nodes_removed_this_iter
                 print(f"Nodes removed this iteration: {nodes_removed_this_iter}")
 
-            # Print summary of results
-            print(f"\nCircuit discovery complete!")
-            print(f"Nodes removed: {total_nodes_removed}")
-            print(f"Final circuit nodes: {len(self.circuit.nodes)}")
+        # Print summary of results
+        print(f"\nCircuit discovery complete!")
+        print(f"Nodes removed: {total_nodes_removed}")
+        print(f"Final circuit nodes: {len(self.circuit.nodes)}")
 
     def run_with_node_patching(
             self,
@@ -457,7 +456,7 @@ class ACDCEdge:
             edges_removed_this_iter = 0
             iteration += 1
             print(f"--- Starting iteration {iteration} ---")
-            for receiver in tqdm(ordered_nodes, desc="Evaluating edges"):
+            for receiver in tqdm(list(ordered_nodes), desc="Evaluating edges"):
                 receiver_id = get_node_id(receiver)
                 senders = self.circuit.get_senders(receiver).copy()
                 if senders != [] and senders is not None:
