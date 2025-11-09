@@ -23,12 +23,12 @@ import numpy as np
 from transformer_lens import HookedTransformer
 import torch
 import pandas as pd
-from typing import Dict
+from typing import Dict, Optional
 from ACDC.utils import add_circuit_hooks
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
-def generate_embeddings_for_training(model_path, full_model, list_of_datasets, layers_to_use, remove_period=True):
+def generate_embeddings_for_training(model_path, full_model, list_of_datasets, layers_to_use, remove_period=True, threshold: Optional = None):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     if full_model:
         model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.float16).to(device)
@@ -39,7 +39,7 @@ def generate_embeddings_for_training(model_path, full_model, list_of_datasets, l
             device=device,
             torch_dtype=torch.float16
         )
-        add_circuit_hooks(model, model_path)
+        add_circuit_hooks(model, model_path, threshold)
 
     dfs: Dict[int, pd.DataFrame] = {}
 
@@ -68,7 +68,7 @@ def generate_embeddings_for_training(model_path, full_model, list_of_datasets, l
                         dfs[layer].at[i, 'embeddings'] = [last_hidden_state.numpy().tolist()]
                         dfs[layer].at[i, 'next_id'] = next_id
                 else:
-                    model_components = "ablated"
+                    model_components = f"ablated-t{threshold}"
                     inputs = model.to_tokens(prompt)
                     logits, cache = model.run_with_cache(inputs)
                     next_id = torch.argmax(logits[:, -1, :], dim=-1).item()
@@ -79,8 +79,8 @@ def generate_embeddings_for_training(model_path, full_model, list_of_datasets, l
                 print("processing: " + str(i) + ", next_token:" + str(next_id))
             for layer in layers_to_use:
                 dfs[layer].to_csv("embeddings/" + "embeddings_with_labels_" + dataset_to_use + "_" +
-                                  model_path.split("/")[-1] + "-" + model_components + "_" + str(abs(layer)) + "_rmv_period.csv",
-                                  index=False)
+                              model_path.split("/")[-1] + "-" + model_components + "_" + str(abs(layer)) + "_rmv_period.csv",
+                              index=False)
 
 def generate_embeddings_for_circuit_discovery(model_path, list_of_datasets, layers_to_use, remove_period=True):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -132,7 +132,7 @@ model_name = "Qwen/Qwen3-0.6B"
 #model_name = "EleutherAI/pythia-70m-deduped"
 
 # Generate embeddings for training and testing probes and for circuit discovery on probes
-#generate_embeddings_for_training(model_path=model_name, full_model=True, list_of_datasets=list_of_datasets, layers_to_use=layers_to_use, remove_period=True)
-generate_embeddings_for_circuit_discovery(model_path=model_name, list_of_datasets=list_of_datasets, layers_to_use=layers_to_use, remove_period=True)
+generate_embeddings_for_training(model_path=model_name, full_model=True, threshold=0.05, list_of_datasets=list_of_datasets, layers_to_use=layers_to_use, remove_period=True)
+#generate_embeddings_for_circuit_discovery(model_path=model_name, list_of_datasets=list_of_datasets, layers_to_use=layers_to_use, remove_period=True)
 
 

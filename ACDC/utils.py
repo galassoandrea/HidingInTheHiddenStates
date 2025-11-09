@@ -196,7 +196,7 @@ def get_node_id(node: Node) -> str:
         node_id = f"L{node.layer}-{node.name.split('_', 1)[1]}"
     return node_id
 
-def save_removed_components(model_name, ablated_nodes: Optional[List[Node]] = None, ablated_edges: Optional[List[Edge]] = None):
+def save_removed_components(model_name, threshold, ablated_nodes: Optional[List[Node]] = None, ablated_edges: Optional[List[Edge]] = None):
     # Store removed edges/nodes metadata in a json file
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
     # Go up one level to root, then into the save folder
@@ -222,24 +222,15 @@ def save_removed_components(model_name, ablated_nodes: Optional[List[Node]] = No
     os.makedirs(save_dir, exist_ok=True)
 
     # Build full file path
-    save_path = os.path.join(save_dir, f"{model_name.replace('/', '-')}.json")
+    save_path = os.path.join(save_dir, f"{model_name.replace('/', '-')}-t{threshold}.json")
     with open(save_path, "w") as f:
         json.dump(params_to_save, f, indent=2)
 
-def load_removed_components(model_name):
+def add_circuit_hooks(model, model_name, threshold):
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
     # Go up one level to root, then into the save folder
     ROOT_DIR = os.path.dirname(SCRIPT_DIR)
-    path = os.path.join(ROOT_DIR, "removed_components", f"{model_name.replace('/', '-')}.json")
-    with open(path, "r") as f:
-        params = json.load(f)
-    return params
-
-def add_circuit_hooks(model, model_name):
-    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-    # Go up one level to root, then into the save folder
-    ROOT_DIR = os.path.dirname(SCRIPT_DIR)
-    path = os.path.join(ROOT_DIR, "removed_components", f"{model_name.replace('/', '-')}.json")
+    path = os.path.join(ROOT_DIR, "removed_components", f"{model_name.replace('/', '-')}-t{threshold}.json")
     with open(path, "r") as f:
         params = json.load(f)
     for node in params["ablated_nodes"]:
