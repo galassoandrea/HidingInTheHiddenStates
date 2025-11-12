@@ -28,9 +28,9 @@ from ACDC.utils import add_circuit_hooks
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
-def generate_embeddings_for_training(model_path, full_model, list_of_datasets, layers_to_use, remove_period=True, threshold: Optional = None):
+def generate_embeddings_for_training(model_path, use_full_model, list_of_datasets, layers_to_use, remove_period=True, threshold: Optional = None):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    if full_model:
+    if use_full_model:
         model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.float16).to(device)
         tokenizer = AutoTokenizer.from_pretrained(model_path)
     else:
@@ -39,6 +39,7 @@ def generate_embeddings_for_training(model_path, full_model, list_of_datasets, l
             device=device,
             torch_dtype=torch.float16
         )
+        model.set_use_attn_result(True)
         add_circuit_hooks(model, model_path, threshold)
 
     dfs: Dict[int, pd.DataFrame] = {}
@@ -56,7 +57,7 @@ def generate_embeddings_for_training(model_path, full_model, list_of_datasets, l
                 prompt = row['statement']
                 if remove_period:
                     prompt = prompt.rstrip(". ")
-                if full_model:
+                if use_full_model:
                     model_components = "all"
                     inputs = tokenizer(prompt, return_tensors="pt")
                     outputs = model.generate(inputs.input_ids.to(device), output_hidden_states=True,
@@ -123,7 +124,7 @@ list_of_datasets = [
     "elements",
     "companies",
     "inventions",
-    #"facts"
+    "facts"
 ]
 
 #model_name = "meta-llama/Llama-2-7b-hf"
@@ -131,8 +132,11 @@ model_name = "Qwen/Qwen3-0.6B"
 #model_name = "facebook/opt-6.7b"
 #model_name = "EleutherAI/pythia-70m-deduped"
 
+threshold = 0.1
+use_full_model = False
+
 # Generate embeddings for training and testing probes and for circuit discovery on probes
-generate_embeddings_for_training(model_path=model_name, full_model=True, threshold=0.05, list_of_datasets=list_of_datasets, layers_to_use=layers_to_use, remove_period=True)
+generate_embeddings_for_training(model_path=model_name, use_full_model=use_full_model, threshold=threshold, list_of_datasets=list_of_datasets, layers_to_use=layers_to_use, remove_period=True)
 #generate_embeddings_for_circuit_discovery(model_path=model_name, list_of_datasets=list_of_datasets, layers_to_use=layers_to_use, remove_period=True)
 
 

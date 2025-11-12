@@ -125,7 +125,7 @@ class ACDCNode:
         )
 
         print(f"Final KL divergence: {kl_score:.6f}")
-        save_removed_components(self.model_name, self.ablated_nodes)
+        save_removed_components(self.model_name, self.threshold, self.ablated_nodes)
         return self.circuit
 
     def circuit_discovery(self, ordered_nodes, clean_tokens, clean_logits, corrupted_node_contributions: Optional = None):

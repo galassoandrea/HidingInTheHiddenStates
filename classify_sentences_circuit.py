@@ -62,7 +62,13 @@ def correct_str(str_arr):
 repeat_each = args.rep
 layer_num_list = [-1, -4, -8, -12, -16]
 
-model_components = "all"
+use_full_model = False
+threshold = 0.1
+
+if use_full_model:
+    model_components = "all"
+else:
+    model_components = f"ablated-t{threshold}"
 
 overall_res = []
 start_time = time.time()

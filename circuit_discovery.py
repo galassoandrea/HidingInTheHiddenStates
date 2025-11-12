@@ -8,13 +8,13 @@ from ACDC.ComputationalGraph import build_computational_graph, ComputationalGrap
 from ACDC.visualization import visualize_computational_graph
 import pandas as pd
 
-def get_task_performance(list_of_datasets, batch_size=32):
+def get_task_performance(list_of_datasets, batch_size=16):
     all_logits = []
     all_labels = []
 
     df_all = pd.DataFrame()
     for d in list_of_datasets:
-        data = pd.read_csv("resources/" + d + "_true_false.csv", nrows=100)
+        data = pd.read_csv("resources/" + d + "_true_false.csv")
         data["topic"] = d
         df_all = pd.concat([df_all, data], ignore_index=True)
 
@@ -59,7 +59,6 @@ def get_task_performance(list_of_datasets, batch_size=32):
 
 #model_name = "EleutherAI/pythia-14m"
 # model_name = "meta-llama/Llama-2-7b-hf"
-# model_name = "google/gemma-2-2b-it"
 model_name = "Qwen/Qwen3-0.6B"
 
 # Load the model
@@ -67,9 +66,9 @@ model = HookedTransformer.from_pretrained(
     model_name,
     device="cuda" if torch.cuda.is_available() else "cpu",
 )
-
 model.set_use_attn_result(True)
-#model.set_use_split_qkv_input(True)
+
+threshold = 0.1
 
 list_of_datasets = [
     "animals",
@@ -81,18 +80,18 @@ list_of_datasets = [
 ]
 
 # Get full-model performance for factuality task both on single dataframes and overall
-#get_task_performance(list_of_datasets)
+get_task_performance(list_of_datasets, batch_size=16) # Adjust batch size based on gpu
 
 ## Run ACDC and extract a circuit
-algorithm = ACDCNode(model, model_name, mode="greedy", method="patching", threshold=0.1)
+algorithm = ACDCNode(model, model_name, mode="greedy", method="patching", threshold=threshold)
 #initial_graph = build_computational_graph(model, model_name, granularity="block")
 #visualize_computational_graph(initial_graph)
 
 circuit = algorithm.run()
 ##visualize_computational_graph(circuit)
-#
+
 # Add hooks for removed (unimportant) nodes to the model, to run the model without those nodes
-#add_circuit_hooks(model, model_name)
+add_circuit_hooks(model, model_name, threshold=threshold)
 
 # Get ablated-model performance
-get_task_performance(list_of_datasets)
+get_task_performance(list_of_datasets, batch_size=16) # Adjust batch size based on gpu
