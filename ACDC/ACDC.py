@@ -201,7 +201,7 @@ class ACDCNode:
                                     node_to_patch=node,
                                     ablated_nodes=self.ablated_nodes
                                 )
-                            kl_div = compute_acdc_score(clean_logits[i:i+batch_size].to(self.device), patched_logits)
+                            kl_div = kl_divergence(clean_logits[i:i+batch_size].to(self.device), patched_logits)
                             kl_divs.append(kl_div.item())
                         avg_kl_div = np.mean(kl_divs)
                         print(f"KL Divergence = {avg_kl_div:.6f}")

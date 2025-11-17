@@ -64,83 +64,87 @@ def jaccard_similarity(set1: Set[str], set2: Set[str]) -> float:
     return intersection / union
 
 def evaluate_factuality(model, list_of_datasets, average_only=False):
-    all_predictions = []
+
     all_labels = []
     all_scores = []
     all_nlls = []
+    all_predictions = []
+
+    model.eval()
+
+    # Get token IDs for 'true' and 'false'
+    true_id = model.to_single_token(" true")
+    false_id = model.to_single_token(" false")
+
     for dataset_to_use in list_of_datasets:
-        predictions = []
-        labels = []
-        scores = []
-        nll_scores = []
+        dataset_labels = []
+        dataset_scores = []
+        dataset_nlls = []
+        dataset_predictions = []
+
         df = pd.read_csv(f"resources/{dataset_to_use}_few_shot_prompt.csv").head(500)
-        # Get token IDs for '0' and '1'
-        true_id = model.to_single_token(" true")
-        false_id = model.to_single_token(" false")
+
         for i in range(len(df)):
-            prompt = df.iloc[i]['prompt']
+            prompt = str(df.iloc[i]['prompt'])
+            label = int(df.at[i, 'label'])
+
             with torch.no_grad():
                 inputs = model.to_tokens(prompt, prepend_bos=True)
-                # Run the model
-                # Output shape: [batch, seq_len, d_vocab]
                 logits = model(inputs)
-                # Get the logits for the last token in the sequence
+                # Get the logits for the last token
                 next_token_logits = logits[0, -1, :]
 
-            # Extract scores for "true" and "false"
-            true_score = next_token_logits[true_id].item()
-            false_score = next_token_logits[false_id].item()
+                # Calculate Probabilities (as the paper does)
+                probs = torch.nn.functional.softmax(next_token_logits, dim=-1)
+                prob_true = probs[true_id].item()
+                prob_false = probs[false_id].item()
 
-            # Calculate NLL
-            # Get the ground truth label
-            label = df.at[i, 'label']
-            # Find the token ID for the correct answer
-            correct_token_id = true_id if label == 1 else false_id
-            # Calculate log probabilities using LogSoftmax
-            log_probs = torch.nn.functional.log_softmax(next_token_logits, dim=-1)
-            # Negate to get NLL
-            nll_score = -log_probs[correct_token_id].item()
+                # Calculate score as ratio P(true) / P(false)
+                # Add a small epsilon to avoid division by zero
+                score_ratio = prob_true / (prob_false + 1e-9)
 
-            # The difference is our continuous score for ROC-AUC
-            score_diff = true_score - false_score
+                # Calculate NLL
+                log_probs = torch.nn.functional.log_softmax(next_token_logits, dim=-1)
+                correct_token_id = true_id if label == 1 else false_id
+                nll_score = -log_probs[correct_token_id].item()
 
-            # Binary prediction for accuracy
-            prediction = 1 if score_diff > 0 else 0
-            predictions.append(prediction)
-            labels.append(label)
-            scores.append(score_diff)
-            nll_scores.append(nll_score)
+                dataset_labels.append(label)
+                dataset_scores.append(score_ratio)
+                dataset_nlls.append(nll_score)
+                dataset_predictions.append(1 if score_ratio > 1.0 else 0)
 
         if not average_only:
-            # Calculate metrics
-            acc = accuracy_score(labels, predictions)
-            fpr, tpr, _ = roc_curve(labels, scores)
+            acc = accuracy_score(dataset_labels, dataset_predictions)
+            # AUC is calculated with the raw scores (ratios)
+            fpr, tpr, _ = roc_curve(dataset_labels, dataset_scores)
             roc_auc_val = auc(fpr, tpr)
-            nll = np.mean(nll_scores)
+            nll = np.mean(dataset_nlls)
 
             print(f"Accuracy for topic {dataset_to_use}: {acc:.4f}")
             print(f"AUC for topic {dataset_to_use}: {roc_auc_val:.4f}")
             print(f"NLL for topic {dataset_to_use}: {nll:.4f}")
 
-        all_predictions.extend(predictions)
-        all_labels.extend(labels)
-        all_scores.extend(scores)
-        all_nlls.extend(nll_scores)
+        all_labels.extend(dataset_labels)
+        all_scores.extend(dataset_scores)
+        all_nlls.extend(dataset_nlls)
+        all_predictions.extend(dataset_predictions)
 
-    # Compute average performance
     acc = accuracy_score(all_labels, all_predictions)
+    # AUC is calculated with the raw scores (ratios)
     fpr, tpr, _ = roc_curve(all_labels, all_scores)
     roc_auc_val = auc(fpr, tpr)
     nll = np.mean(all_nlls)
 
+    print("-" * 30)
     print(f"Average accuracy: {acc:.4f}")
     print(f"Average AUC: {roc_auc_val:.4f}")
     print(f"Average NLL: {nll:.4f}")
+    print("-" * 30)
 
     return acc, roc_auc_val, nll
 
 
-def evaluate_factuality_paper_baseline(model, list_of_datasets, average_only=False):
+def evaluate_factuality_it_is_true_baseline(model, list_of_datasets, average_only=False):
 
     all_predictions = []
     all_labels = []
@@ -201,13 +205,6 @@ def evaluate_factuality_paper_baseline(model, list_of_datasets, average_only=Fal
                     # Get the j-th token ID of the statement 'X'
                     token_id = tokens_x[0, j]
 
-                    # Find the logit index for predicting this token
-                    # The logits for predicting the (k+1)-th token are at index k.
-                    # The prefix (incl. BOS) has 'len_prefix_true' tokens.
-                    # The logits for predicting the *first* token of X (which is the
-                    # (len_prefix_true + 1)-th token) are at index (len_prefix_true - 1).
-                    # For the j-th token of X, the index is (len_prefix_true - 1) + j.
-
                     true_logit_idx = (len_prefix_true - 1) + j
                     false_logit_idx = (len_prefix_false - 1) + j
 
@@ -220,8 +217,6 @@ def evaluate_factuality_paper_baseline(model, list_of_datasets, average_only=Fal
                         score_false += log_probs_false[false_logit_idx, token_id].item()
                     else:
                         print(f"Warning: Index mismatch for dataset {dataset_to_use}, row {i}. Skipping token {j}.")
-
-                # --- 4. Calculate metrics ---
 
                 # The continuous score for ROC-AUC is the log-prob difference
                 score_diff = score_true - score_false
@@ -240,10 +235,6 @@ def evaluate_factuality_paper_baseline(model, list_of_datasets, average_only=Fal
                 labels.append(label)
                 scores.append(score_diff)
                 nll_scores.append(nll_score)
-
-        if not predictions:
-            print(f"No data processed for {dataset_to_use}.")
-            continue
 
         if not average_only:
             # Calculate metrics

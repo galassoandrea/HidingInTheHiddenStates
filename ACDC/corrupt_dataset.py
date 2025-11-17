@@ -135,7 +135,9 @@ states = ['Solid', 'Liquid', 'Gas']
 for topic in list_of_datasets:
     # Load the dataframe
     df_path = os.path.join(root_dir, "resources", f"{topic}_true_false.csv")
-    df = pd.read_csv(df_path).head(100)
+    df = pd.read_csv(df_path)
+    # Extract "true" sentences
+    df = df[df["label"] == 1].iloc[:200]
     # Extract clean sentences and labels
     clean_statements = df['statement'].tolist()
     labels = df['label'].tolist()

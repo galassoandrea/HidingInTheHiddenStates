@@ -78,4 +78,5 @@ model.set_use_attn_result(True)
 #run_circuit_discovery_multiple_samples(model, n_samples_per_iteration, threshold=0.1)
 
 # Run ACDC over different thresholds
-run_circuit_discovery_multiple_thresholds(model, thresholds=[0.1, 0.2], n_samples=50)
+#run_circuit_discovery_multiple_thresholds(model, thresholds=[0.1, 0.2], n_samples=50)
+

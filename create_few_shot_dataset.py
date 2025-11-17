@@ -1,3 +1,5 @@
+import random
+
 import pandas as pd
 
 def build_prompt_dataset_original(list_of_datasets, n_shots):
@@ -36,11 +38,12 @@ def build_prompt_dataset_clean_corrupted(list_of_datasets, n_shots):
             clean_prompt = ""
             corrupted_prompt = ""
             for j in range(n_shots - 1, 0, -1):
-                sentence = df.at[i - j, 'clean_statement']
+                clean_sentence = df.at[i - j, 'clean_statement']
+                corrupted_sentence = df.at[i - j, 'corrupted_statement']
+                sentence = random.choice([clean_sentence, corrupted_sentence])
+                label = "true. " if sentence == clean_sentence else "false. "
                 sentence = sentence.rstrip(". ")
-                sentence += ": "
-                truth = df.at[i - j, 'label']
-                sentence += "true. " if truth == 1 else "false. "
+                sentence += f": {label}"
                 clean_prompt += sentence
                 corrupted_prompt += sentence
             clean_prompt += df.at[i, 'clean_statement']
@@ -60,15 +63,6 @@ def build_prompt_dataset_clean_corrupted(list_of_datasets, n_shots):
         # Create dataframe
         prompts_df = pd.DataFrame(rows)
         prompts_df.to_csv(f"resources/{dataset_to_use}_clean_corrupted_prompt.csv", index=False)
-
-list_of_datasets = [
-    "animals",
-    "cities",
-    "elements",
-    "companies",
-    "inventions",
-    "facts"
-]
 
 n_shots = 3
 
