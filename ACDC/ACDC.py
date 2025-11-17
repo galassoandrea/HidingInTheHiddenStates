@@ -2,7 +2,7 @@ import ast
 import pandas as pd
 from sklearn.metrics import roc_auc_score, accuracy_score
 from .utils import *
-from .evaluation import kl_divergence
+from .evaluation import kl_divergence, compute_acdc_score
 import numpy as np
 from tqdm import tqdm
 from .ComputationalGraph import Node, build_computational_graph
@@ -18,7 +18,10 @@ class ACDCNode:
     def __init__(self, model, model_name,
                  mode: str = "greedy",
                  method: str = "patching",
-                 threshold: float = 0.1):
+                 threshold: float = 0.1,
+                 num_samples: int = 50,
+                 topics = None
+                 ):
 
         self.model = model
         self.model_name = model_name
@@ -39,9 +42,14 @@ class ACDCNode:
         script_dir = os.path.dirname(os.path.abspath(__file__))
         root_dir = os.path.dirname(script_dir)
         self.dataset = pd.DataFrame()
-        for topic in ["animals", "cities", "elements", "companies", "inventions"]:
-            df_path = os.path.join(root_dir, "resources", f"{topic}_clean_corrupted.csv")
-            df = pd.read_csv(df_path, nrows=10)
+        if topics is None:
+            self.topics = ["animals", "cities", "elements", "companies", "inventions"]
+        else:
+            self.topics = topics
+        num_samples_per_topic = num_samples // len(self.topics)
+        for topic in self.topics:
+            df_path = os.path.join(root_dir, "resources", f"{topic}_clean_corrupted_prompt.csv")
+            df = pd.read_csv(df_path, nrows=num_samples_per_topic)
             df["topic"] = topic
             self.dataset = pd.concat([self.dataset, df], ignore_index=True)
 
@@ -58,19 +66,21 @@ class ACDCNode:
         print(f"Total edges: {len(self.circuit.edges)}")
 
         # Pre-tokenize dataset examples
-        clean_tokens = self.model.to_tokens(self.dataset['clean_statement'].tolist()).to(self.device)
-        corrupted_tokens = self.model.to_tokens(self.dataset['corrupted_statement'].tolist()).to(self.device)
+        clean_tokens = self.model.to_tokens(self.dataset['clean_prompt'].tolist()).to(self.device)
+        corrupted_tokens = self.model.to_tokens(self.dataset['corrupted_prompt'].tolist()).to(self.device)
         # Pad to max length
         max_len = max(clean_tokens.shape[1], corrupted_tokens.shape[1])
         clean_tokens = torch.nn.functional.pad(
             clean_tokens,
-            (0, max_len - clean_tokens.shape[1]),
-            value=self.model.tokenizer.pad_token_id
+            (max_len - clean_tokens.shape[1], 0),  # <-- Pad on the LEFT
+            "constant",
+            self.model.tokenizer.pad_token_id
         )
         corrupted_tokens = torch.nn.functional.pad(
             corrupted_tokens,
-            (0, max_len - corrupted_tokens.shape[1]),
-            value=self.model.tokenizer.pad_token_id
+            (max_len - corrupted_tokens.shape[1], 0),  # <-- Pad on the LEFT
+            "constant",
+            self.model.tokenizer.pad_token_id
         )
 
         # Collect clean and corrupted reference outputs and caches
@@ -78,13 +88,15 @@ class ACDCNode:
         clean_logits_list = []
         corrupted_caches_list = [] if self.method == "patching" else None
         act_names = get_activations_name(self.model_name, self.model.cfg.n_layers, target="node")
-        with (torch.no_grad()):
+        with torch.no_grad():
             for i in range(0, len(self.dataset), batch_size):
                 batch_clean = clean_tokens[i:i + batch_size]
                 batch_corrupted = corrupted_tokens[i:i + batch_size]
 
                 # Run a forward pass and collect clean logits (we don't need clean caches for node patching)
                 batch_logits = self.model(batch_clean, return_type="logits")
+                # Extract logits for the last position
+                batch_logits = batch_logits[:, -1, :]
                 clean_logits_list.append(batch_logits.cpu())
 
                 if self.method == "patching":
@@ -114,19 +126,12 @@ class ACDCNode:
 
         # Clear gpu
         torch.cuda.empty_cache()
+        # Clear previous hooks
+        self.model.reset_hooks()
 
-        # Compute final KL divergence (add all hooks at the same time)
-        kl_score = get_final_performance(
-            model=self.model,
-            clean_tokens=clean_tokens,
-            clean_labels=self.dataset['label'].tolist(),
-            clean_logits=clean_logits,
-            ablated_nodes=self.ablated_nodes
-        )
-
-        print(f"Final KL divergence: {kl_score:.6f}")
-        save_removed_components(self.model_name, self.threshold, self.ablated_nodes)
-        return self.circuit
+        # Save removed components
+        save_removed_components(self.model_name, self.threshold, len(self.dataset), self.topics, self.ablated_nodes)
+        return self.circuit, self.ablated_nodes
 
     def circuit_discovery(self, ordered_nodes, clean_tokens, clean_logits, corrupted_node_contributions: Optional = None):
         print(f"Starting node evaluation with threshold: {self.threshold}")
@@ -139,7 +144,7 @@ class ACDCNode:
             if "pythia" in self.model_name:
                 # Iterate through nodes and ablate them
                 for node in tqdm(list(ordered_nodes), desc="Evaluating nodes"):
-                    if node.name in ['hook_resid_pre', 'hook_resid_post', 'hook_mlp_out', 'hook_result']:
+                    if node.name in ['hook_mlp_out', 'hook_result']:
                         node_id = get_node_id(node)
                         print(f"Evaluating node: {node_id}")
                         # Temporarily remove the node
@@ -163,7 +168,7 @@ class ACDCNode:
                             kl_div = kl_divergence(clean_logits[i:i+batch_size].to(self.device), patched_logits)
                             kl_divs.append(kl_div.item())
                         avg_kl_div = np.mean(kl_divs)
-                        print(f"Avg KL Divergence = {avg_kl_div:.6f}")
+                        print(f"KL Divergence = {avg_kl_div:.6f}")
                         if avg_kl_div < self.threshold:
                             self.circuit.remove_node(node)
                             ordered_nodes.remove(node)
@@ -175,8 +180,7 @@ class ACDCNode:
             else:
                 # Iterate through nodes and ablate them
                 for node in tqdm(list(ordered_nodes), desc="Evaluating nodes"):
-                    if node.name in ['hook_resid_pre', 'hook_resid_mid', 'hook_resid_post', 'hook_mlp_out',
-                                     'hook_result']:
+                    if node.name in ['hook_mlp_out', 'hook_result']:
                         node_id = get_node_id(node)
                         print(f"Evaluating node: {node_id}")
                         # Temporarily remove the node
@@ -197,10 +201,10 @@ class ACDCNode:
                                     node_to_patch=node,
                                     ablated_nodes=self.ablated_nodes
                                 )
-                            kl_div = kl_divergence(clean_logits[i:i+batch_size].to(self.device), patched_logits)
+                            kl_div = compute_acdc_score(clean_logits[i:i+batch_size].to(self.device), patched_logits)
                             kl_divs.append(kl_div.item())
                         avg_kl_div = np.mean(kl_divs)
-                        print(f"Avg KL Divergence = {avg_kl_div:.6f}")
+                        print(f"KL Divergence = {avg_kl_div:.6f}")
                         if avg_kl_div < self.threshold:
                             self.circuit.remove_node(node)
                             ordered_nodes.remove(node)
@@ -254,6 +258,8 @@ class ACDCNode:
         # Run forward pass
         with torch.no_grad():
             patched_logits = self.model(inputs)
+            # Extract logits for the last token
+            patched_logits = patched_logits[:, -1, :]
 
         return patched_logits
 

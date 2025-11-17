@@ -1,58 +1,278 @@
+from typing import Set
+
+import pandas as pd
 import torch
 import torch.nn.functional as F
 import numpy as np
-from sklearn.metrics import accuracy_score, roc_auc_score, log_loss, roc_curve
+from sklearn.metrics import accuracy_score, roc_auc_score, log_loss, roc_curve, auc
 
 """Evaluation functions for circuit discovery and model outputs."""
 
 def kl_divergence(clean_logits, corrupted_logits, dim: int = -1):
     """Compute KL divergence between two logit distributions: KL(P || Q)."""
-    # Convert logits to probability distributions
-    log_probs_clean = F.log_softmax(clean_logits, dim=dim)  # log P
-    log_probs_corrupted = F.log_softmax(corrupted_logits, dim=dim)  # log Q
-    probs_clean = log_probs_clean.exp()  # P
+    # Convert to log-probabilities and probabilities
+    clean_log_probs = F.log_softmax(clean_logits, dim=-1)
+    clean_probs = F.softmax(clean_logits, dim=-1)
 
-    # KL(P || Q) = sum P * (logP - logQ)
-    kl = torch.sum(probs_clean * (log_probs_clean - log_probs_corrupted), dim=dim)
+    patched_log_probs = F.log_softmax(corrupted_logits, dim=-1)
 
-    if kl.dim() > 1:
-        kl = kl.mean(dim=-1)
+    # Compute KL Divergence: D_KL(Clean || Patched)
+    kl_div = F.kl_div(
+        patched_log_probs,  # The "new" distribution (Q)
+        clean_probs,  # The "target" distribution (P)
+        reduction='batchmean',
+        log_target=False
+    )
 
-    return kl.mean()
+    return kl_div
 
-def evaluate_factuality(all_logits: torch.Tensor, all_labels, model):
-    """
-    Optimized version that works directly with batches.
-    """
+def compute_logit_difference(logits, true_id, false_id, labels):
 
-    # Get token IDs for '0' and '1'
-    token_0_id = model.to_tokens("0", prepend_bos=False)[0, 0].item()
-    token_1_id = model.to_tokens("1", prepend_bos=False)[0, 0].item()
+    # Extract logits for true and false
+    true_logits = logits[:, true_id]
+    false_logits = logits[:, false_id]
 
-    # Extract logits at the last position for tokens "0" and "1"
-    logits_0 = all_logits[:, token_0_id]
-    logits_1 = all_logits[:, token_1_id]
+    # Calculate logit-diff
+    logit_diff = true_logits - false_logits
 
-    # Stack logits for "0" and "1" into a 2D tensor
-    binary_logits = torch.stack([logits_0, logits_1], dim=1)
+    # When answer is false (0), flip the sign
+    sign = 2 * labels.float() - 1  # Maps 0->-1, 1->1
+    logit_diff = logit_diff * sign
 
-    # Compute probabilities using softmax
-    probs = F.softmax(binary_logits, dim=1)
-    probs_1 = probs[:, 1].numpy()
+    return logit_diff
 
-    # Get predictions: 1 if logit_1 > logit_0, else 0
-    predictions = (logits_1 > logits_0).long().numpy()
+def compute_acdc_score(clean_logits, corrupted_logits, true_id, false_id, labels):
+    clean_logit_diff = compute_logit_difference(clean_logits, true_id, false_id, labels)
+    corrupted_logit_diff = compute_logit_difference(corrupted_logits, true_id, false_id, labels)
+    difference = clean_logit_diff - corrupted_logit_diff
+    return difference.mean()
 
-    # Convert labels to numpy if needed
-    labels_np = np.array(all_labels)
+def jaccard_similarity(set1: Set[str], set2: Set[str]) -> float:
+    """Calculates the Jaccard similarity coefficient between two sets."""
 
-    # Compute metrics
-    accuracy = accuracy_score(labels_np, predictions)
-    roc_auc = roc_auc_score(labels_np, probs_1)
+    # Handle the case of two empty sets (Jaccard is 1, they are identical)
+    if not set1 and not set2:
+        return 1.0
 
-    # Compute NLL (Negative Log-Likelihood)
-    # Convert labels to tensor for loss computation
-    labels_tensor = torch.tensor(all_labels, dtype=torch.long)
-    nll = F.cross_entropy(binary_logits, labels_tensor).item()
+    intersection = len(set1.intersection(set2))
+    union = len(set1.union(set2))
 
-    print(f"Accuracy: {accuracy:.4f}, ROC-AUC: {roc_auc:.4f}, NLL: {nll:.4f}")
+    # Handle division by zero (if union is 0 but not both sets, similarity is 0)
+    if union == 0:
+        return 0.0
+
+    return intersection / union
+
+def evaluate_factuality(model, list_of_datasets, average_only=False):
+    all_predictions = []
+    all_labels = []
+    all_scores = []
+    all_nlls = []
+    for dataset_to_use in list_of_datasets:
+        predictions = []
+        labels = []
+        scores = []
+        nll_scores = []
+        df = pd.read_csv(f"resources/{dataset_to_use}_few_shot_prompt.csv").head(500)
+        # Get token IDs for '0' and '1'
+        true_id = model.to_single_token(" true")
+        false_id = model.to_single_token(" false")
+        for i in range(len(df)):
+            prompt = df.iloc[i]['prompt']
+            with torch.no_grad():
+                inputs = model.to_tokens(prompt, prepend_bos=True)
+                # Run the model
+                # Output shape: [batch, seq_len, d_vocab]
+                logits = model(inputs)
+                # Get the logits for the last token in the sequence
+                next_token_logits = logits[0, -1, :]
+
+            # Extract scores for "true" and "false"
+            true_score = next_token_logits[true_id].item()
+            false_score = next_token_logits[false_id].item()
+
+            # Calculate NLL
+            # Get the ground truth label
+            label = df.at[i, 'label']
+            # Find the token ID for the correct answer
+            correct_token_id = true_id if label == 1 else false_id
+            # Calculate log probabilities using LogSoftmax
+            log_probs = torch.nn.functional.log_softmax(next_token_logits, dim=-1)
+            # Negate to get NLL
+            nll_score = -log_probs[correct_token_id].item()
+
+            # The difference is our continuous score for ROC-AUC
+            score_diff = true_score - false_score
+
+            # Binary prediction for accuracy
+            prediction = 1 if score_diff > 0 else 0
+            predictions.append(prediction)
+            labels.append(label)
+            scores.append(score_diff)
+            nll_scores.append(nll_score)
+
+        if not average_only:
+            # Calculate metrics
+            acc = accuracy_score(labels, predictions)
+            fpr, tpr, _ = roc_curve(labels, scores)
+            roc_auc_val = auc(fpr, tpr)
+            nll = np.mean(nll_scores)
+
+            print(f"Accuracy for topic {dataset_to_use}: {acc:.4f}")
+            print(f"AUC for topic {dataset_to_use}: {roc_auc_val:.4f}")
+            print(f"NLL for topic {dataset_to_use}: {nll:.4f}")
+
+        all_predictions.extend(predictions)
+        all_labels.extend(labels)
+        all_scores.extend(scores)
+        all_nlls.extend(nll_scores)
+
+    # Compute average performance
+    acc = accuracy_score(all_labels, all_predictions)
+    fpr, tpr, _ = roc_curve(all_labels, all_scores)
+    roc_auc_val = auc(fpr, tpr)
+    nll = np.mean(all_nlls)
+
+    print(f"Average accuracy: {acc:.4f}")
+    print(f"Average AUC: {roc_auc_val:.4f}")
+    print(f"Average NLL: {nll:.4f}")
+
+    return acc, roc_auc_val, nll
+
+
+def evaluate_factuality_paper_baseline(model, list_of_datasets, average_only=False):
+
+    all_predictions = []
+    all_labels = []
+    all_scores = []
+    all_nlls = []
+
+    model.eval()
+
+    for dataset_to_use in list_of_datasets:
+        predictions = []
+        labels = []
+        scores = []
+        nll_scores = []
+
+        df = pd.read_csv(f"resources/{dataset_to_use}_true_false.csv").head(500)
+
+        for i in range(len(df)):
+            # Get the original statement 'X' and its label
+            original_statement = str(df.iloc[i]['statement'])
+            label = int(df.at[i, 'label'])
+
+            # Create the two prompt contexts
+            prompt_true_context = f"It is true that {original_statement}"
+            prompt_false_context = f"It is false that {original_statement}"
+
+            with torch.no_grad():
+
+                # Tokenize the full prompts (transformer-lens adds BOS by default)
+                tokens_true = model.to_tokens(prompt_true_context)
+                tokens_false = model.to_tokens(prompt_false_context)
+
+                # Tokenize the statement 'X' *without* BOS to get its tokens
+                tokens_x = model.to_tokens(original_statement, prepend_bos=False)
+
+                # Tokenize the prefixes *with* BOS to find the length
+                tokens_prefix_true = model.to_tokens("It is true that ")
+                tokens_prefix_false = model.to_tokens("It is false that ")
+
+                # Get the number of tokens
+                len_x = tokens_x.shape[1]
+                # Length of prefix *including* BOS
+                len_prefix_true = tokens_prefix_true.shape[1]
+                len_prefix_false = tokens_prefix_false.shape[1]
+
+                # Get logits: shape [batch, seq_len, d_vocab]
+                logits_true = model(tokens_true)
+                logits_false = model(tokens_false)
+
+                # Get log_probs: shape [batch, seq_len, d_vocab]
+                # We use [0] to remove the batch dimension
+                log_probs_true = torch.nn.functional.log_softmax(logits_true[0], dim=-1)
+                log_probs_false = torch.nn.functional.log_softmax(logits_false[0], dim=-1)
+
+                score_true = 0.0
+                score_false = 0.0
+
+                for j in range(len_x):
+                    # Get the j-th token ID of the statement 'X'
+                    token_id = tokens_x[0, j]
+
+                    # Find the logit index for predicting this token
+                    # The logits for predicting the (k+1)-th token are at index k.
+                    # The prefix (incl. BOS) has 'len_prefix_true' tokens.
+                    # The logits for predicting the *first* token of X (which is the
+                    # (len_prefix_true + 1)-th token) are at index (len_prefix_true - 1).
+                    # For the j-th token of X, the index is (len_prefix_true - 1) + j.
+
+                    true_logit_idx = (len_prefix_true - 1) + j
+                    false_logit_idx = (len_prefix_false - 1) + j
+
+                    # Ensure we are not indexing out of bounds
+                    if true_logit_idx < log_probs_true.shape[0] and \
+                            false_logit_idx < log_probs_false.shape[0]:
+
+                        # Add the log-probability of the *correct* token
+                        score_true += log_probs_true[true_logit_idx, token_id].item()
+                        score_false += log_probs_false[false_logit_idx, token_id].item()
+                    else:
+                        print(f"Warning: Index mismatch for dataset {dataset_to_use}, row {i}. Skipping token {j}.")
+
+                # --- 4. Calculate metrics ---
+
+                # The continuous score for ROC-AUC is the log-prob difference
+                score_diff = score_true - score_false
+
+                # Binary prediction for accuracy
+                prediction = 1 if score_diff > 0 else 0
+
+                # Calculate NLL
+                # We normalize the two scores into a probability distribution
+                # and take the NLL of the correct label.
+                scores_for_nll = torch.tensor([score_false, score_true])  # [P(false), P(true)]
+                log_probs_nll = torch.nn.functional.log_softmax(scores_for_nll, dim=-1)
+                nll_score = -log_probs_nll[label].item()  # label is 0 or 1
+
+                predictions.append(prediction)
+                labels.append(label)
+                scores.append(score_diff)
+                nll_scores.append(nll_score)
+
+        if not predictions:
+            print(f"No data processed for {dataset_to_use}.")
+            continue
+
+        if not average_only:
+            # Calculate metrics
+            acc = accuracy_score(labels, predictions)
+            fpr, tpr, _ = roc_curve(labels, scores)
+            roc_auc_val = auc(fpr, tpr)
+            nll = np.mean(nll_scores)
+
+            print(f"Accuracy for topic {dataset_to_use}: {acc:.4f}")
+            print(f"AUC for topic {dataset_to_use}: {roc_auc_val:.4f}")
+            print(f"NLL for topic {dataset_to_use}: {nll:.4f}")
+
+        all_predictions.extend(predictions)
+        all_labels.extend(labels)
+        all_scores.extend(scores)
+        all_nlls.extend(nll_scores)
+
+    # Compute average performance
+    acc = accuracy_score(all_labels, all_predictions)
+    fpr, tpr, _ = roc_curve(all_labels, all_scores)
+    roc_auc_val = auc(fpr, tpr)
+    nll = np.mean(all_nlls)
+
+    print("-" * 30)
+    print(f"Average accuracy: {acc:.4f}")
+    print(f"Average AUC: {roc_auc_val:.4f}")
+    print(f"Average NLL: {nll:.4f}")
+    print("-" * 30)
+
+    return acc, roc_auc_val, nll
+
+

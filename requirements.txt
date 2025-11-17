@@ -9,3 +9,6 @@ torch==2.6.0
 tqdm==4.67.1
 transformers==4.57.0
 transformer-lens==2.16.1
+seaborn==0.13.2
+matplotlib==3.10.6
+plotly==6.3.0

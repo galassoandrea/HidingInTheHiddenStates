@@ -1,5 +1,14 @@
+import json
+import os
+from typing import List, Tuple, Set, Dict, Any
 import plotly.graph_objects as go
 from collections import defaultdict
+import matplotlib.pyplot as plt
+import seaborn as sns
+import pandas as pd
+from matplotlib.patches import Patch
+from ACDC.evaluation import jaccard_similarity
+
 
 def visualize_computational_graph(
         graph,
@@ -316,3 +325,166 @@ def visualize_computational_graph_hierarchical(
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False)
     )
     return fig
+
+
+def plot_circuit_convergence(experiments):
+    all_experiments: List[Tuple[str, List[str]]] = []
+    for n_samples, components in experiments.items():
+        run_id = f"N={n_samples}"
+        all_experiments.append((run_id, components))
+
+    # Calculate Jaccard Scores
+    # Get the *final* set of removed components (from the last experiment)
+    final_set = set(all_experiments[-1][1])
+
+    plot_data = []
+
+    for exp in all_experiments:
+        current_set = set(exp[1])
+        samples = exp[0]
+
+        # Compare the current set to the final, stable set
+        score = jaccard_similarity(current_set, final_set)
+
+        plot_data.append({
+            "samples": samples,
+            "jaccard_index": score
+        })
+
+    # Convert to DataFrame for easy plotting
+    plot_df = pd.DataFrame(plot_data)
+
+    # Plot the Line Chart
+
+    plt.figure(figsize=(10, 6))
+
+    sns.lineplot(
+        data=plot_df,
+        x="samples",
+        y="jaccard_index",
+        marker='o',
+        markersize=8
+    )
+
+    plt.ylim(0, 1.1)  # Set Y-axis from 0.0 to 1.1 (for padding)
+    plt.title('Convergence of Discovered Circuits', fontsize=16)
+    plt.xlabel('Number of Samples Used for Circuit Discovery', fontsize=12)
+    plt.ylabel('Jaccard Similarity to Final Set (N=100)', fontsize=12)
+    plt.grid(True, linestyle='--', alpha=0.6)
+
+    # Add a horizontal line at 1.0 for reference
+    plt.axhline(y=1.0, color='red', linestyle='--', label='Perfect Convergence (1.0)')
+    plt.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_circuit_discovery_heatmap(experiments: Dict[int, List[str]], visualization_mode):
+
+    # Transform data into the format needed for plotting:
+    # [ ("Run 1 (N=20)", ["L6-Head2", "L6-Head1"]), ... ]
+    all_experiments: List[Tuple[str, List[str]]] = []
+    if visualization_mode == "samples":
+        for n_samples, components in experiments.items():
+            run_id = f"N={n_samples}"
+            all_experiments.append((run_id, components))
+    else: # threshold visualization
+        for threshold, components in experiments.items():
+            run_id = f"T={threshold}"
+            all_experiments.append((run_id, components))
+    # Prepare the Data Grid
+    # Get all experiment IDs in the new sorted order
+    experiment_ids = [exp_id for exp_id, removals in all_experiments]
+
+    # Find all unique components that were *ever* removed
+    all_unique_removed: Set[str] = set()
+    for _, removals in all_experiments:
+        all_unique_removed.update(removals)
+
+    # Sort the components for a stable Y-axis
+    sorted_unique_components = sorted(list(all_unique_removed))
+
+    if not sorted_unique_components:
+        print("No removed components found in any experiment. Nothing to plot.")
+        return
+
+    # Create the empty 0-filled DataFrame
+    heatmap_df = pd.DataFrame(
+        0,
+        index=sorted_unique_components,
+        columns=experiment_ids
+    )
+
+    # Fill the Grid
+    # Populate the DataFrame. 1 = Removed, 0 = Kept.
+    for exp_id, removals in all_experiments:
+        for component in removals:
+            if component in heatmap_df.index:
+                heatmap_df.loc[component, exp_id] = 1
+
+    # Plot the Heatmap
+    cmap = sns.color_palette(["#EAEAEB", "#B00000"])  # [Kept, Removed]
+
+    fig_height = max(6, int(len(sorted_unique_components) * 0.4))
+    fig_width = max(10, len(experiment_ids) * 1)
+
+    plt.figure(figsize=(fig_width, fig_height))
+
+    ax = sns.heatmap(
+        heatmap_df,
+        annot=False,
+        cmap=cmap,
+        linewidths=.5,
+        linecolor='lightgrey',
+        cbar=False,
+        vmin=0,
+        vmax=1
+    )
+
+    # Add custom legend
+    legend_elements = [
+        Patch(facecolor="#B00000", edgecolor='black', label='Component Removed'),
+        Patch(facecolor="#EAEAEB", edgecolor='black', label='Component Kept')
+    ]
+    ax.legend(handles=legend_elements, loc='upper right', bbox_to_anchor=(1.35, 1))
+
+    plt.title('Component Removal by Experiment', fontsize=16)
+    if visualization_mode == "samples":
+        plt.xlabel('Increasing n samples for circuit discovery', fontsize=12)
+    else: # threshold
+        plt.xlabel('Increasing threshold for circuit discovery', fontsize=12)
+    plt.ylabel('Component', fontsize=12)
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_scores_by_threshold(scores_per_threshold):
+
+    metric_names = ['Accuracy', 'ROC-AUC', 'NLL']
+
+    # Convert dictionary to DataFrame in long format for seaborn
+    data = []
+    for threshold, scores in scores_per_threshold.items():
+        for metric_name, score in zip(metric_names, scores):
+            data.append({
+                'Threshold': threshold,
+                'Score': score,
+                'Metric': metric_name
+            })
+
+    df = pd.DataFrame(data)
+
+    # Create the plot
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.lineplot(data=df, x='Threshold', y='Score', hue='Metric',
+                 marker='o', ax=ax)
+
+    ax.set_xlabel('Threshold', fontsize=12)
+    ax.set_ylabel('Score', fontsize=12)
+    ax.set_title('Model Performance Metrics vs Threshold', fontsize=14)
+    ax.legend(title='Metric', fontsize=10)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.show()

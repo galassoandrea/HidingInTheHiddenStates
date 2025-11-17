@@ -86,8 +86,9 @@ class ComputationalGraph:
         if node in self.nodes:
             self.nodes.remove(node)
             # Remove all edges associated with the node
-            for receiver in self.adjacency[node].copy():
-                self.remove_edge(Edge(sender=node, receiver=receiver))
+            if node.full_activation in self.adjacency:
+                for receiver in self.adjacency[node].copy():
+                    self.remove_edge(Edge(sender=node, receiver=receiver))
             for sender in self.reverse_adjacency[node].copy():
                 self.remove_edge(Edge(sender=sender, receiver=node))
             # Clean up adjacency lists

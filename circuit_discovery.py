@@ -1,65 +1,63 @@
+import os
+from typing import List, Tuple, Optional
 import torch
 from tqdm import tqdm
 from transformer_lens import HookedTransformer
 from ACDC.ACDC import ACDCNode
-from ACDC.utils import add_circuit_hooks
+from ACDC.utils import add_circuit_hooks, get_node_id
 from ACDC.evaluation import evaluate_factuality
 from ACDC.ComputationalGraph import build_computational_graph, ComputationalGraph
-from ACDC.visualization import visualize_computational_graph
+from ACDC.visualization import visualize_computational_graph, plot_circuit_discovery_heatmap, plot_circuit_convergence, \
+     plot_scores_by_threshold
 import pandas as pd
 
-def get_task_performance(list_of_datasets, batch_size=16):
-    all_logits = []
-    all_labels = []
+def run_circuit_discovery_multiple_samples(model, n_samples_per_iteration: List[int], threshold: float, topics = None):
+    experiment_data = {}
+    num_runs = len(n_samples_per_iteration)
+    # All topics except facts
+    if topics == None:
+        topics = [ "animals", "cities", "elements", "companies", "inventions"]
+    file_path = f"removed_components/{model_name.replace('/', '-')}-t{threshold}.json"
+    if os.path.exists(file_path):
+        os.remove(file_path)
+    for i, n_samples in enumerate(n_samples_per_iteration):
+        print(f"\nRun {i+1}/{num_runs} with {n_samples} samples per iteration\n")
+        algorithm = ACDCNode(model, model_name, mode="greedy", method="patching", threshold=threshold,
+                             num_samples=n_samples, topics=topics)
+        _, ablated_nodes = algorithm.run()
+        components = [get_node_id(node) for node in ablated_nodes]
+        experiment_data[n_samples] = components
 
-    df_all = pd.DataFrame()
-    for d in list_of_datasets:
-        data = pd.read_csv("resources/" + d + "_true_false.csv")
-        data["topic"] = d
-        df_all = pd.concat([df_all, data], ignore_index=True)
+    plot_circuit_discovery_heatmap(experiment_data, visualization_mode="samples")
+    plot_circuit_convergence(experiment_data)
 
-    for topic in list_of_datasets:
-        df = df_all[df_all["topic"] == topic].copy()
-        logits = []
+def run_circuit_discovery_multiple_thresholds(model, thresholds: List[float], n_samples: int, topics = None):
+    experiment_data = {}
+    scores_per_threshold = {}
+    num_runs = len(thresholds)
+    # All topics except facts
+    if topics == None:
+        topics = [ "animals", "cities", "elements", "companies", "inventions"]
+    for i, threshold in enumerate(thresholds):
+        print(f"\nRun {i+1}/{num_runs} with threshold {threshold}\n")
+        algorithm = ACDCNode(model, model_name, mode="greedy", method="patching", threshold=threshold,
+                            num_samples=n_samples, topics=topics)
+        _, ablated_nodes = algorithm.run()
+        components = [get_node_id(node) for node in ablated_nodes]
+        experiment_data[threshold] = components
+        # Add hooks for removed components
+        add_circuit_hooks(model, model_name, threshold=threshold)
+        # Compute performance
+        accuracy, roc_auc, nll = evaluate_factuality(model, topics, average_only=True)
+        scores_per_threshold[threshold] = [accuracy, roc_auc, nll]
 
-        prompts = df['statement'].tolist()
-        labels = df['label'].tolist()
+    plot_circuit_discovery_heatmap(experiment_data, visualization_mode="threshold")
+    plot_scores_by_threshold(scores_per_threshold)
 
-        # Tokenize with padding
-        prompt_tokens = model.to_tokens(prompts, padding_side="left").to(model.cfg.device)
 
-        # Process in batches
-        for i in tqdm(range(0, len(prompt_tokens), batch_size), desc=f"Evaluating {topic}"):
-            batch = prompt_tokens[i:i + batch_size]
-
-            with torch.no_grad():
-                output = model(batch)
-
-                if hasattr(output, 'logits'):
-                    batch_logits = output.logits
-                else:
-                    batch_logits = output
-
-                last_token_logits = batch_logits[:, -1, :]
-                logits.append(last_token_logits.cpu())
-
-        # Concatenate all batches at once
-        logits = torch.cat(logits, dim=0)
-
-        print(f"Factuality evaluation for {topic} dataset: ")
-        evaluate_factuality(logits, labels, model)
-        all_logits.append(logits)
-        all_labels.extend(labels)
-
-    # Concatenate all datasets
-    all_logits = torch.cat(all_logits, dim=0)
-
-    print(f"Overall factuality evaluation: ")
-    evaluate_factuality(all_logits, all_labels, model)
-
-#model_name = "EleutherAI/pythia-14m"
+model_name = "EleutherAI/pythia-14m"
 # model_name = "meta-llama/Llama-2-7b-hf"
-model_name = "Qwen/Qwen3-0.6B"
+#model_name = "Qwen/Qwen3-0.6B"
 
 # Load the model
 model = HookedTransformer.from_pretrained(
@@ -68,30 +66,16 @@ model = HookedTransformer.from_pretrained(
 )
 model.set_use_attn_result(True)
 
-threshold = 0.1
+# ---------------------------------------------------
+# ---- RUN EXPERIMENTS USING THE CODE BELOW ----
+# If you want to run ACDC over a specific topic, insert it in a list as the last argument of the function:
+# e.g. run_circuit_discovery_multiple_samples(model, n_samples_per_iteration, threshold=0.1, topics=['animals'])
+# ---- DE-COMMENT THE FUNCTION FOR THE EXPERIMENTS YOU WANT TO EXECUTE ----
+# ---------------------------------------------------
 
-list_of_datasets = [
-    "animals",
-    "cities",
-    "elements",
-    "companies",
-    "inventions",
-    "facts"
-]
+# Run ACDC over different numbers of dataset elements
+#n_samples_per_iteration = [10, 20, 30, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+#run_circuit_discovery_multiple_samples(model, n_samples_per_iteration, threshold=0.1)
 
-# Get full-model performance for factuality task both on single dataframes and overall
-get_task_performance(list_of_datasets, batch_size=16) # Adjust batch size based on gpu
-
-## Run ACDC and extract a circuit
-algorithm = ACDCNode(model, model_name, mode="greedy", method="patching", threshold=threshold)
-#initial_graph = build_computational_graph(model, model_name, granularity="block")
-#visualize_computational_graph(initial_graph)
-
-circuit = algorithm.run()
-##visualize_computational_graph(circuit)
-
-# Add hooks for removed (unimportant) nodes to the model, to run the model without those nodes
-add_circuit_hooks(model, model_name, threshold=threshold)
-
-# Get ablated-model performance
-get_task_performance(list_of_datasets, batch_size=16) # Adjust batch size based on gpu
+# Run ACDC over different thresholds
+run_circuit_discovery_multiple_thresholds(model, thresholds=[0.1, 0.2], n_samples=50)
