@@ -24,7 +24,7 @@ def run_circuit_discovery_multiple_samples(model, n_samples_per_iteration: List[
         print(f"\nRun {i+1}/{num_runs} with {n_samples} samples per iteration\n")
         algorithm = ACDCNode(model, model_name, mode="greedy", method="patching", threshold=threshold,
                              num_samples=n_samples, topics=topics)
-        _, ablated_nodes = algorithm.run()
+        _, ablated_nodes = algorithm.run(batch_size=8)
         components = [get_node_id(node) for node in ablated_nodes]
         experiment_data[n_samples] = components
 
@@ -74,8 +74,8 @@ model.set_use_attn_result(True)
 # ---------------------------------------------------
 
 # Run ACDC over different numbers of dataset elements
-#n_samples_per_iteration = [10, 20, 30, 20, 30, 40, 50, 60, 70, 80, 90, 100]
-#run_circuit_discovery_multiple_samples(model, n_samples_per_iteration, threshold=0.1)
+n_samples_per_iteration = [10, 20, 30, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+run_circuit_discovery_multiple_samples(model, n_samples_per_iteration, threshold=0.1)
 
 # Run ACDC over different thresholds
 #run_circuit_discovery_multiple_thresholds(model, thresholds=[0.1, 0.2], n_samples=50)

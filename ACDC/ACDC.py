@@ -34,7 +34,6 @@ class ACDCNode:
         self.full_graph = None
         self.circuit = None
 
-        # Cache for model activations and logits
         self.ablated_nodes = []
 
         # Create dataset
@@ -53,7 +52,7 @@ class ACDCNode:
             df["topic"] = topic
             self.dataset = pd.concat([self.dataset, df], ignore_index=True)
 
-    def run(self):
+    def run(self, batch_size=8):
         """ Main method to perform circuit discovery. """
 
         print(f"Building computational graph for {self.model_name}...")
@@ -84,7 +83,6 @@ class ACDCNode:
         )
 
         # Collect clean and corrupted reference outputs and caches
-        batch_size = 8
         clean_logits_list = []
         corrupted_caches_list = [] if self.method == "patching" else None
         act_names = get_activations_name(self.model_name, self.model.cfg.n_layers, target="node")
@@ -122,22 +120,23 @@ class ACDCNode:
             del corrupted_caches
         # Clear gpu
         torch.cuda.empty_cache()
-        self.circuit_discovery(ordered_nodes, clean_tokens, clean_logits, corrupted_node_contributions=corrupted_node_contributions if self.method == "patching" else None)
+        self.circuit_discovery(ordered_nodes, clean_tokens, clean_logits, batch_size=batch_size, corrupted_node_contributions=corrupted_node_contributions if self.method == "patching" else None)
 
         # Clear gpu
         torch.cuda.empty_cache()
         # Clear previous hooks
         self.model.reset_hooks()
+        del corrupted_node_contributions
+        del clean_logits
 
         # Save removed components
         save_removed_components(self.model_name, self.threshold, len(self.dataset), self.topics, self.ablated_nodes)
         return self.circuit, self.ablated_nodes
 
-    def circuit_discovery(self, ordered_nodes, clean_tokens, clean_logits, corrupted_node_contributions: Optional = None):
+    def circuit_discovery(self, ordered_nodes, clean_tokens, clean_logits, batch_size, corrupted_node_contributions: Optional = None):
         print(f"Starting node evaluation with threshold: {self.threshold}")
         nodes_removed_this_iter = 1
         total_nodes_removed = 0
-        batch_size = 8
         while nodes_removed_this_iter > 0:
             nodes_removed_this_iter = 0
             # Run circuit discovery based on the model
@@ -262,51 +261,6 @@ class ACDCNode:
             patched_logits = patched_logits[:, -1, :]
 
         return patched_logits
-
-    def evaluate_circuit(self, test_data):
-        all_preds = []
-        all_probs = []
-        statements, labels = test_data
-        # Tokenize dataset
-        clean_tokens = self.model.to_tokens(statements).to(self.device)
-        # Pad to max length
-        max_len = max(clean_tokens.shape[1])
-        clean_tokens = torch.nn.functional.pad(
-            clean_tokens,
-            (0, max_len - clean_tokens.shape[1]),
-            value=self.model.tokenizer.pad_token_id
-        )
-        print("Evaluating circuit on test data...")
-        with torch.no_grad():
-            # Cache activations and keep only needed ones
-            act_names = get_activations_name(self.model_name, self.model.cfg.n_layers, target="edge")
-            _, clean_caches = self.model.run_with_cache(clean_tokens, return_type="logits", names_filter=act_names)
-        # Precompute node contributions for all examples
-        clean_node_contributions, _ = precompute_node_contributions(self.full_graph, "pruning", self.device, "block", clean_caches)
-        # Clear memory from caches since we don't need them anymore
-        del clean_caches
-        # Clear gpu
-        torch.cuda.empty_cache()
-        # Iterate over examples, run with ablation hooks and compute metrics
-        for i in range(len(clean_tokens)):
-            # Add all hooks for patched edges
-            add_all_hooks(self.model, i, clean_node_contributions, ablated_nodes=self.ablated_nodes)
-            # Run forward pass
-            with torch.no_grad():
-                inputs = clean_tokens[i]
-                patched_logits = self.model(inputs)
-                logits = patched_logits[0, -1, :]  # last token's logits (shape: [2])
-                probs = torch.softmax(logits, dim=-1)[1].item()  # class 1 probability
-                pred = int(probs > 0.5)
-                all_probs.append(probs)
-                all_preds.append(pred)
-        # Reset all hooks
-        self.model.reset_hooks()
-        # Compute metrics
-        accuracy = accuracy_score(labels, all_preds)
-        roc_auc = roc_auc_score(labels, all_probs)
-        print(f"Accuracy of the circuit on the test set: {accuracy:.4f}")
-        print(f"ROC-AUC of the circuit on the test set: {roc_auc:.4f}")
 
 
 class ACDCEdge:
