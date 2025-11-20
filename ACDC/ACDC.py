@@ -65,8 +65,8 @@ class ACDCNode:
         print(f"Total edges: {len(self.circuit.edges)}")
 
         # Pre-tokenize dataset examples
-        clean_tokens = self.model.to_tokens(self.dataset['clean_prompt'].tolist()).to(self.device)
-        corrupted_tokens = self.model.to_tokens(self.dataset['corrupted_prompt'].tolist()).to(self.device)
+        clean_tokens = self.model.to_tokens(self.dataset['clean_statement'].tolist()).to(self.device)
+        corrupted_tokens = self.model.to_tokens(self.dataset['corrupted_statement'].tolist()).to(self.device)
         # Pad to max length
         max_len = max(clean_tokens.shape[1], corrupted_tokens.shape[1])
         clean_tokens = torch.nn.functional.pad(

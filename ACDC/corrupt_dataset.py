@@ -20,18 +20,24 @@ def corrupt_sentence(sentence, topic):
             other_habitats = [a for a in habitats if a != clean_habitat and clean_habitat not in a]
             corr_habitat = random.choice(other_habitats)
             words[idx + 2] = corr_habitat
-        elif re.search(r'\b(?:is a|is an)\b', sentence.lower()):
-            idx = next(i for i, word in enumerate(words) if (word == "a" or word == "an") and words[i - 1] == "is")
-            clean_species = words[idx + 1]
-            other_species = [a for a in species if a != clean_species]
-            corr_species = random.choice(other_species)
-            words[idx + 1] = corr_species
         elif re.search(r'\bfor locomotion\b', sentence.lower()):
             idx = next(i for i, word in enumerate(words) if word == "for")
             clean_movement = words[idx - 1]
             other_movements = [m for m in movements if m != clean_movement]
             corr_movement = random.choice(other_movements)
             words[idx - 1] = corr_movement
+        elif re.search(r'\bhas a diet of\b', sentence.lower()):
+            idx = next(i for i, word in enumerate(words) if word == "diet")
+            clean_diet = words[idx + 2]
+            other_diets = [d for d in diets if d != clean_diet]
+            corr_diet = random.choice(other_diets)
+            words[idx + 2] = corr_diet
+        elif re.search(r'\b(?:is a|is an)\b', sentence.lower()):
+            idx = next(i for i, word in enumerate(words) if (word == "a" or word == "an") and words[i - 1] == "is")
+            clean_species = words[idx + 1]
+            other_species = [a for a in species if a != clean_species]
+            corr_species = random.choice(other_species)
+            words[idx + 1] = corr_species
         else:
             clean_animal = words[1]
             other_animals = [a for a in animals if a != clean_animal]
@@ -108,6 +114,7 @@ animals = ['beaver', 'leopard', 'swan', 'polar bear', 'wolverine', 'salmon', 'rh
 movements = ['walking', 'running', 'swimming', 'jumping', 'flying']
 habitats = ['forest/grassland', 'marine/polar', 'coastal/alkaline lakes', 'freshwater', 'savanna', 'desert',
                  'forest/urban', 'farmland', 'arctic/subarctic', 'mountain']
+diets = ['insectivore', 'carnivore', 'herbivore', 'omnivore', 'nectar']
 species = ['mammal', 'bird', 'fish', 'reptile', 'amphibian', 'insect', 'arachnid', 'crustacean', 'mollusk',
                 'cnidarian']
 elements = ['Tantalum', 'Calcium', 'Gadolinium', 'Samarium', 'Cerium', 'Iridium', 'Rhenium', 'Scandium', 'Nickel',
