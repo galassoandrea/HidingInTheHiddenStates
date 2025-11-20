@@ -47,7 +47,7 @@ class ACDCNode:
             self.topics = topics
         num_samples_per_topic = num_samples // len(self.topics)
         for topic in self.topics:
-            df_path = os.path.join(root_dir, "resources", f"{topic}_clean_corrupted_prompt.csv")
+            df_path = os.path.join(root_dir, "resources", f"{topic}_clean_corrupted.csv")
             df = pd.read_csv(df_path).head(num_samples_per_topic)
             df["topic"] = topic
             self.dataset = pd.concat([self.dataset, df], ignore_index=True)

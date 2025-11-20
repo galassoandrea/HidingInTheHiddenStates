@@ -27,7 +27,6 @@ def run_circuit_discovery_multiple_samples(model, n_samples_per_iteration: List[
         _, ablated_nodes = algorithm.run(batch_size=8)
         components = [get_node_id(node) for node in ablated_nodes]
         experiment_data[n_samples] = components
-
     plot_circuit_discovery_heatmap(experiment_data, visualization_mode="samples")
     plot_circuit_convergence(experiment_data)
 
@@ -55,9 +54,9 @@ def run_circuit_discovery_multiple_thresholds(model, thresholds: List[float], n_
     plot_scores_by_threshold(scores_per_threshold)
 
 
-model_name = "EleutherAI/pythia-14m"
+#model_name = "EleutherAI/pythia-14m"
 # model_name = "meta-llama/Llama-2-7b-hf"
-#model_name = "Qwen/Qwen3-0.6B"
+model_name = "Qwen/Qwen3-0.6B"
 
 # Load the model
 model = HookedTransformer.from_pretrained(
@@ -74,7 +73,7 @@ model.set_use_attn_result(True)
 # ---------------------------------------------------
 
 # Run ACDC over different numbers of dataset elements
-n_samples_per_iteration = [10, 20, 30, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+n_samples_per_iteration = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 run_circuit_discovery_multiple_samples(model, n_samples_per_iteration, threshold=0.1)
 
 # Run ACDC over different thresholds

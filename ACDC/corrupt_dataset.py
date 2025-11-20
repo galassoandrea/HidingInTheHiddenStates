@@ -26,6 +26,12 @@ def corrupt_sentence(sentence, topic):
             other_species = [a for a in species if a != clean_species]
             corr_species = random.choice(other_species)
             words[idx + 1] = corr_species
+        elif re.search(r'\bfor locomotion\b', sentence.lower()):
+            idx = next(i for i, word in enumerate(words) if word == "for")
+            clean_movement = words[idx - 1]
+            other_movements = [m for m in movements if m != clean_movement]
+            corr_movement = random.choice(other_movements)
+            words[idx - 1] = corr_movement
         else:
             clean_animal = words[1]
             other_animals = [a for a in animals if a != clean_animal]
@@ -99,6 +105,7 @@ animals = ['beaver', 'leopard', 'swan', 'polar bear', 'wolverine', 'salmon', 'rh
                 'giraffe', 'ostrich', 'dog', 'slug', 'tortoise', 'hummingbird', 'tiger', 'camel', 'zebra', 'lobster',
                 'kangaroo', 'aardvark', 'dolphin', 'manta ray', 'tuna', 'elephant', 'peacock', 'goldfish', 'raccoon',
                 'alpaca', 'axolotl', 'armadillo']
+movements = ['walking', 'running', 'swimming', 'jumping', 'flying']
 habitats = ['forest/grassland', 'marine/polar', 'coastal/alkaline lakes', 'freshwater', 'savanna', 'desert',
                  'forest/urban', 'farmland', 'arctic/subarctic', 'mountain']
 species = ['mammal', 'bird', 'fish', 'reptile', 'amphibian', 'insect', 'arachnid', 'crustacean', 'mollusk',
