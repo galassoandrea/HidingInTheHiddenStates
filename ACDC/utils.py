@@ -246,14 +246,17 @@ def save_removed_components(model_name, threshold, num_samples, topics, ablated_
     with open(save_path, "w") as f:
         json.dump(all_data, f, indent=2)
 
-def add_circuit_hooks(model, model_name, threshold):
+def add_circuit_hooks(model, model_name, threshold, experiment_index: Optional = None):
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
     # Go up one level to root, then into the save folder
     ROOT_DIR = os.path.dirname(SCRIPT_DIR)
     path = os.path.join(ROOT_DIR, "removed_components", f"{model_name.replace('/', '-')}-t{threshold}.json")
     with open(path, "r") as f:
         params = json.load(f)
-    experiment_data = params["experiments"][-1]  # Load the last experiment
+    if experiment_index is not None:
+        experiment_data = params["experiments"][experiment_index]  # Load specific experiment
+    else:
+        experiment_data = params["experiments"][-1]  # Load the last experiment
     components = experiment_data["components"]
     for node in components:
         layer = int(node.split('-')[0][1:])

@@ -73,8 +73,8 @@ def evaluate_factuality(model, list_of_datasets, average_only=False):
     model.eval()
 
     # Get token IDs for 'true' and 'false'
-    true_id = model.to_single_token(" true")
-    false_id = model.to_single_token(" false")
+    true_id = model.to_single_token("true")
+    false_id = model.to_single_token("false")
 
     for dataset_to_use in list_of_datasets:
         dataset_labels = []

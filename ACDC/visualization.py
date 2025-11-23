@@ -488,3 +488,63 @@ def plot_scores_by_threshold(scores_per_threshold):
 
     plt.tight_layout()
     plt.show()
+
+def plot_scores_by_n_samples(df_results):
+
+    # Convert from wide format (separate columns) to long format for Seaborn
+    df_long = df_results.melt(
+        id_vars=['n_samples'],
+        value_vars=['accuracy', 'roc_auc'],
+        var_name='Metric',
+        value_name='Score'
+    )
+
+    # Rename metrics values for legend
+    df_long['Metric'] = df_long['Metric'].replace({
+        'accuracy': 'Accuracy',
+        'roc_auc': 'ROC-AUC'
+    })
+
+    # Create the plot
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.lineplot(
+        data=df_long,
+        x='n_samples',
+        y='Score',
+        hue='Metric',
+        marker='o',
+        ax=ax
+    )
+    ax.set_xlabel('N samples', fontsize=12)
+    ax.set_ylabel('Score', fontsize=12)
+    ax.set_title('Circuit performance at different number of samples for circuit discovery', fontsize=14)
+    ax.legend(title='Metric', fontsize=10)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.show()
+
+
+def plot_results_multiple_samples(model_name, threshold):
+    nodes_removed_per_samples = {}
+
+    # Load file with experiments data
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+    # Go up one level to root, then into the save folder
+    ROOT_DIR = os.path.dirname(SCRIPT_DIR)
+    path = os.path.join(ROOT_DIR, "removed_components", f"{model_name.replace('/', '-')}-t{threshold}.json")
+    with open(path, "r") as f:
+        params = json.load(f)
+    experiments_data = params["experiments"]
+    for experiment in experiments_data:
+        n_samples = experiment["samples"]
+        nodes = experiment["components"]
+        nodes_removed_per_samples[n_samples] = nodes
+
+    # Plot heatmap of removed components
+    plot_circuit_discovery_heatmap(nodes_removed_per_samples, visualization_mode="samples")
+
+    # Plot line-chart showing circuits convergence
+    plot_circuit_convergence(nodes_removed_per_samples)
+
+
