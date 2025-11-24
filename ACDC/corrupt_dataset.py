@@ -4,6 +4,9 @@ import re
 
 import pandas as pd
 
+# Set seed for reproducibility
+random.seed(42)
+
 def corrupt_sentence(sentence, topic):
     sentence = sentence.rstrip(".")
     words = sentence.split()
