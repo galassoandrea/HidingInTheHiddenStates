@@ -25,3 +25,9 @@ def build_prompt_dataset_original(list_of_datasets, n_shots):
         # Create dataframe
         prompts_df = pd.DataFrame(rows)
         prompts_df.to_csv(f"resources/{dataset_to_use}_few_shot_prompt.csv", index=False)
+
+n_shots = 3
+
+# Build few-shot prompt dataset from original sentences
+build_prompt_dataset_original(list_of_datasets=["animals", "cities", "elements", "companies", "inventions", "facts"],
+                              n_shots=n_shots)

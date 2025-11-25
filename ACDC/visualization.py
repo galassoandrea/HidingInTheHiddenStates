@@ -493,17 +493,11 @@ def plot_scores_by_n_samples(df_results):
 
     # Convert from wide format (separate columns) to long format for Seaborn
     df_long = df_results.melt(
-        id_vars=['n_samples'],
-        value_vars=['accuracy', 'roc_auc'],
+        id_vars=['N_samples'],
+        value_vars=['Accuracy', 'ROC-AUC'],
         var_name='Metric',
         value_name='Score'
     )
-
-    # Rename metrics values for legend
-    df_long['Metric'] = df_long['Metric'].replace({
-        'accuracy': 'Accuracy',
-        'roc_auc': 'ROC-AUC'
-    })
 
     # Create the plot
     fig, ax = plt.subplots(figsize=(10, 6))

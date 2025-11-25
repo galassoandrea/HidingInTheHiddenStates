@@ -33,10 +33,6 @@ def evaluate_circuit_performance_multiple_samples(model, n_samples_per_iteration
     if topics is None:
         topics = ["animals", "cities", "elements", "companies", "inventions", "facts"]
 
-    file_path = f"removed_components/{model_name.replace('/', '-')}-t{threshold}.json"
-    if os.path.exists(file_path):
-        os.remove(file_path)
-
     for i, n_samples in enumerate(n_samples_per_iteration):
         print(f"\nEvaluating circuit for {n_samples} samples (Run {i + 1}/{len(n_samples_per_iteration)})\n")
 
@@ -44,7 +40,7 @@ def evaluate_circuit_performance_multiple_samples(model, n_samples_per_iteration
         add_circuit_hooks(model, model_name, threshold, i)
 
         # Compute performance and store data
-        accuracy, roc_auc, nll = evaluate_factuality(model, topics, average_only=True)
+        accuracy, roc_auc, nll = evaluate_factuality(model, topics)
         results_data.append({
             "N_samples": n_samples,
             "Threshold": threshold,
@@ -56,14 +52,14 @@ def evaluate_circuit_performance_multiple_samples(model, n_samples_per_iteration
 
     # Create results dataframe
     df_results = pd.DataFrame(results_data)
-    plot_scores_by_n_samples(df_results)
     print(df_results)
     df_results.to_csv(f"removed_components/{model_name.replace('/', '-')}-t{threshold}.csv")
+    plot_scores_by_n_samples(df_results)
 
 
-model_name = "EleutherAI/pythia-14m"
+#model_name = "EleutherAI/pythia-14m"
 # model_name = "meta-llama/Llama-2-7b-hf"
-#model_name = "Qwen/Qwen3-0.6B"
+model_name = "Qwen/Qwen3-0.6B"
 
 # Load the model
 model = HookedTransformer.from_pretrained(
@@ -80,9 +76,9 @@ model.set_use_attn_result(True)
 # ---------------------------------------------------
 
 # Run ACDC over different numbers of dataset elements
-n_samples_per_iteration = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
-run_circuit_discovery_multiple_samples(model, n_samples_per_iteration, threshold=0.1)
-#plot_results_multiple_samples(model_name, threshold=0.1)
+#n_samples_per_iteration = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+#run_circuit_discovery_multiple_samples(model, n_samples_per_iteration, threshold=0.1)
+plot_results_multiple_samples(model_name, threshold=0.3)
 #evaluate_circuit_performance_multiple_samples(model, n_samples_per_iteration, threshold=0.1)
 
 # Run ACDC over different thresholds
